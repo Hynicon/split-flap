@@ -1,0 +1,17 @@
+# Build output
+.pio/
+.vscode/
+__pycache__/
+*.pyc
+
+# Secrets — never commit
+.env
+secrets.h
+*.local.*
+
+# Read-only upstream reference clones
+upstream/
+
+# Printables STLs (license: check before redistributing)
+hardware/stl/*
+!hardware/stl/README.md
