@@ -35,8 +35,9 @@ Known upstream problems to handle:
 ### Hardware changes vs upstream
 - **Replace ESP-01 master with an ESP32** (ESP32 DevKit or ESP32-C3 SuperMini, ~$3–5). Reasons: enough RAM for 3 TLS connections, real debug serial, free pins. Units and PCBs stay unchanged.
 - **I2C level shifting:** ESP32 is 3.3 V and **not 5 V tolerant**; Nanos' `Wire` enables internal pull-ups to 5 V. Use a BSS138 bi-directional level shifter (~$0.50) between ESP32 and the bus, *or* disable AVR internal pull-ups in unit firmware and use external 4.7 kΩ pull-ups to 3.3 V. Pick the level shifter (safer).
+  *Correction 2026-10-16:* the upstream **first-unit PCB already has one** (2× BSS138 + 10 kΩ pull-ups + AMS1117-3.3 for the ESP-01S socket). The ESP32 connects to that socket with 4 wires, so no extra part is needed. See `hardware/wiring.md`.
 - **Unit count: 9** (configurable, decided 2026-10-16): 2 label units + 7 digit units.
-- **Power:** 5 V ≥ 3 A supply. 9 × 28BYJ-48 can draw ~2.2 A when all move at once. Add a 1000 µF cap on the 5 V rail.
+- **Power (corrected 2026-10-16 from upstream's build PDF):** the system runs on **12 V**. It uses **12 V 28BYJ-48 steppers** (5 V ones don't work), and each unit PCB has an L7805 for the Nano. Upstream measured 186 mA @12 V per flipping unit, so 9 units ≈ 1.8 A peak. Use a **12 V ≥ 3 A** supply and an optional 1000 µF/25 V cap.
 - **Flaps:** the default 45-flap set (blank, A–Z, `$ & #`, 0–9, `: . - ? !`). There are no accented flaps. Text input is folded instead: Portuguese and other Latin-1 accents become the base letter (`ã→A`, `ç→C`), and anything without a flap becomes blank.
 
 ### Display layout (9 units)
@@ -194,9 +195,9 @@ Tests (`pio test -e native`) must cover: 0, 9, 1234567 (width 7), 9999999, 10000
 ### Phase 7 — Hardware bring-up checklist (user + Claude Code together)
 1. Print parts per Printables instructions (PETG or PLA). Put STLs in `hardware/stl/`.
 2. Build **one unit first**: flash unit firmware, set DIP = 0000 (→ 0x10), run offset tool until the blank flap shows after every home. Test the suspected `calibrate()` inversion here; fix only if observed.
-3. Wire ESP32 → level shifter → unit 1; verify I2C scan finds 0x10; send test characters (calibration sequence from upstream `#define test`).
+3. Wire ESP32 → first-unit PCB's ESP-01S socket (on-board level shifter) → unit 1; verify I2C scan finds 0x10; send test characters (calibration sequence from upstream `#define test`).
 4. Add units one by one (DIP 0001, 0010, …); confirm each address in scan.
-5. Full 8-unit test with all moving at once — check supply voltage doesn't sag below 4.75 V.
+5. Full 9-unit test with all moving at once — check the 12 V rail doesn't sag below ~11 V (each 7805 needs ≥ 7 V in).
 6. 24-hour soak test.
 
 ### Phase 8 — Docs & cleanup
@@ -210,15 +211,15 @@ Tests (`pio test -e native`) must cover: 0, 9, 1234567 (width 7), 9999999, 10000
 | Item | Qty | ~Cost |
 |---|---|---|
 | Arduino Nano clone | 8 | $24 |
-| 28BYJ-48 stepper (+ULN2003 if not on PCB) | 8 | $12 |
+| **12 V** 28BYJ-48 stepper (ULN2003A is on the PCB) | 8 | $12 |
 | KY003 hall sensor + 4 mm magnet | 8 | $4 |
 | 4-pos DIP switch | 8 | $2 |
 | Unit PCB (upstream Gerbers, JLCPCB 10 pcs) or perfboard | 8 | $5–10 + shipping |
 | ESP32 / ESP32-C3 SuperMini | 1 | $4 |
-| BSS138 level shifter | 1 | $0.50 |
-| 5 V 3 A power supply + barrel jack + 1000 µF cap | 1 | $7 |
+| BSS138 level shifter (already on the first-unit PCB) | 1 | $0.50 |
+| **12 V 3 A** power supply + barrel jack + 1000 µF cap | 1 | $9 |
 | Filament + screws/wire | — | $10 |
-| **Total** | | **~$70–75** |
+| **Total** | | **~$70–75** (8 units; see README for the 9-unit BOM) |
 
 Cost-saving option (bigger code change, decide before Phase 1): drop the per-unit Nanos and drive all ULN2003s from one ESP32 via shift registers / I2C expanders (PCF8575 / MCP23017), as in Morgan Manly's ESP32-C3 split-flap design. Saves ~$25 but replaces the unit firmware and PCB.
 
