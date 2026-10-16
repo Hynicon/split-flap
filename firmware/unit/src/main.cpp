@@ -7,7 +7,8 @@
   - flap table comes from the shared firmware/common/charset.h
   - optional 3rd command byte CMD_REHOME (0xFE): re-home before moving
   - received bytes are bounds-checked; flap index >= FLAP_COUNT is ignored; speed clamped to 1..12 rpm
-  - variables written from the I2C interrupt are volatile
+  - variables shared with the I2C interrupt are volatile
+  - status byte also reports busy while a received move is still pending
 *********/
 
 //#define serial // uncomment for serial debug communication
@@ -44,7 +45,7 @@
 unsigned long lastRotation = 0;
 
 //globals
-int displayedLetter = 0; //currently shown letter
+volatile int displayedLetter = 0; //currently shown letter (read in requestEvent)
 int desiredLetter = 0; //letter to be shown
 Stepper stepper(STEPS, STEPPERPIN1, STEPPERPIN3, STEPPERPIN2, STEPPERPIN4); //stepper setup
 bool lastInd1 = false; //store last status of phase
@@ -247,8 +248,9 @@ void receiveLetter(int numBytes) {
 }
 
 void requestEvent() {
-  //report busy while a re-home is still pending so the master keeps waiting
-  Wire.write((currentlyrotating || rehomeRequested) ? 1 : 0); //send unit status to master
+  //report busy while a re-home or move is still pending (e.g. held back by OVERHEATINGTIMEOUT)
+  //so the master keeps waiting instead of sending the next frame early
+  Wire.write((currentlyrotating || rehomeRequested || displayedLetter != receivedNumber) ? 1 : 0); //send unit status to master
 }
 
 //returns the adress of the unit as int from 0-15

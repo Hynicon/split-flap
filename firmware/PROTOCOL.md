@@ -19,7 +19,7 @@ The protocol is unchanged from upstream except for the address base and the opti
 If the target index is lower than the current one, the drum turns all the way round and re-homes on the way (the motor only turns one direction).
 
 ## Unit → master (read, 1 byte)
-- `1`: the drum is rotating or homing.
+- `1`: the drum is rotating or homing, or a received move is still pending (for example, held back by the 2 s overheating timeout). Upstream reported `0` in that last case.
 - `0`: idle.
 - No answer (`Wire.read()` returns `-1`): the unit is asleep or missing. The master sends an empty write to wake it, then retries. A unit asleep in AVR power-down wakes on an address match.
 
