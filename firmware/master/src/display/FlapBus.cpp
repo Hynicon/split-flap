@@ -7,10 +7,16 @@
 static uint8_t addressOf(uint8_t unit) { return UNIT_I2C_BASE + unit; }
 
 void FlapBus::begin(uint8_t units, int sda, int scl, uint32_t freq) {
-  units_ = units > UNIT_MAX_COUNT ? UNIT_MAX_COUNT : units;
   Wire.begin(sda, scl, freq);
   Wire.setTimeOut(50);
+  setUnits(units);
+}
+
+void FlapBus::setUnits(uint8_t units) {
+  units_ = units > UNIT_MAX_COUNT ? UNIT_MAX_COUNT : units;
   shown_.assign(units_, '?');  // unknown until the first frame is sent
+  queued_.resize(units_, ' ');
+  scan();
 }
 
 uint16_t FlapBus::scan() {
@@ -118,7 +124,8 @@ void FlapBus::update() {
         }
       } else if (now - waitStart_ > waitTimeoutMs) {
         lastError_ = "timeout waiting for units to stop";
-        Serial.printf("[bus] %s after %lu ms\n", lastError_.c_str(), (unsigned long)waitTimeoutMs);
+        Serial.printf("[bus] %s after %lu ms, re-homing\n", lastError_.c_str(), (unsigned long)waitTimeoutMs);
+        rehome_ = true;  // a unit stuck busy has probably lost its position
         if (pending_) {
           transmit();  // units accept a new target at any time; don't stall the display forever
           state_ = State::Moving;

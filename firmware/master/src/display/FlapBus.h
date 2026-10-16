@@ -12,7 +12,8 @@ class FlapBus {
  public:
   enum class State { Idle, WaitingForUnits, Moving };
 
-  void begin(uint8_t units, int sda = 21, int scl = 22, uint32_t freq = 50000);
+  void begin(uint8_t units, int sda = 21, int scl = 22, uint32_t freq = 50000);  // also scans
+  void setUnits(uint8_t units);  // change unit count at runtime (rescans the bus)
 
   // Probes every configured unit address; returns bitmask of units that ACKed (bit i = unit i).
   uint16_t scan();

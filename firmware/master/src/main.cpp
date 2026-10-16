@@ -1,41 +1,30 @@
 // Split-flap social follower counter — ESP32 master.
 #include <Arduino.h>
+#include <WiFi.h>
 
-#include "charset.h"
-#include "display/FlapBus.h"
-#include "sources/Source.h"
+#include "app/App.h"
 
-static const uint8_t UNITS = 9;
-static FlapBus bus;
-static TokenStore tokens;
-static InstagramSource instagram(tokens);
-static FacebookSource facebook(tokens);
-static TikTokSource tiktok(tokens);
-static Source* const SOURCES[] = {&tiktok, &instagram, &facebook};
+static App app;
 
-// Temporary bring-up helper: type a line in the serial monitor to show it on the units.
+// Serial console for bring-up: "!scan", "!rehome", "!status", or any text to show it.
 static void handleSerial() {
   static String line;
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
     if (c != '\n') {
-      if (line.length() < 64) line += c;
+      if (line.length() < 80) line += c;
       continue;
     }
     if (line == "!scan") {
-      bus.scan();
-    } else if (line == "!fetch") {
-      for (Source* src : SOURCES) {
-        FetchResult r = src->fetch();
-        Serial.printf("[%s] %s %llu %s\n", src->id(), fetchStatusName(r.status), r.followers, r.error.c_str());
-      }
+      app.bus().scan();
     } else if (line == "!rehome") {
-      bus.rehomeAll();
-    } else {
-      char folded[UNIT_MAX_COUNT + 1];
-      foldToFlaps(line.c_str(), folded, sizeof folded);
-      bus.show(folded, 10);
+      app.requestRehome();
+    } else if (line == "!status") {
+      Serial.println(app.statusJson().c_str());
+    } else if (line.length()) {
+      std::string err = app.showText(line.c_str(), "left");
+      if (!err.empty()) Serial.printf("[serial] %s\n", err.c_str());
     }
     line = "";
   }
@@ -44,12 +33,15 @@ static void handleSerial() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n[boot] split-flap master");
-  bus.begin(UNITS);
-  bus.scan();
+  Serial.printf("\n[boot] split-flap master, reset reason %d\n", (int)esp_reset_reason());
+  app.begin();
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin();  // credentials stored in NVS by the setup portal
 }
 
 void loop() {
   handleSerial();
-  bus.update();
+  app.loop();
+  delay(1);
 }
