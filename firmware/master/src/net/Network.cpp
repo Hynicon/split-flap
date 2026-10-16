@@ -40,17 +40,22 @@ void Network::begin(App& app) {
     showBlocking("SETUP", 20000);
   });
 
+  // The portal is an open AP, so it may only change the admin key when someone has physical access
+  // (BOOT held) or on first setup. A Wi-Fi outage must never open it: otherwise anyone in range
+  // could set a new admin key and take over the device.
+  bool setupAllowed = buttonHeld || !app.adminKeySet();
   bool connected;
-  if (buttonHeld || !app.adminKeySet()) {
+  if (setupAllowed) {
     Serial.println(buttonHeld ? "[wifi] BOOT held: opening setup portal" : "[wifi] no admin key yet: opening setup portal");
     connected = wm.startConfigPortal(PORTAL_SSID);
   } else {
+    wm.setEnableConfigPortal(false);  // saved network unreachable -> retry in the background, no portal
     connected = wm.autoConnect(PORTAL_SSID);
   }
 
   app.setOverlay("");
   String key = adminKey.getValue();
-  if (key.length() >= 8) {
+  if (setupAllowed && key.length() >= 8) {
     app.setAdminKey(key.c_str());
     Serial.println("[wifi] admin key saved");
   } else if (!app.adminKeySet()) {

@@ -94,6 +94,8 @@ Wiring, power and the step-by-step hardware bring-up: **[hardware/wiring.md](har
 
 To change Wi-Fi or the admin key later, **hold the BOOT button while powering on**. That reopens the setup portal.
 
+The portal is an open network, so once an admin key is set it **only** opens when BOOT is held. If your router is down when the device boots, it simply keeps retrying in the background and does not open the portal. Otherwise anyone nearby could set a new admin key.
+
 ## Connecting the platforms
 Every platform needs a free developer app that **you** own. It stays in development/sandbox mode, because it only ever reads your own account. Each one is a one-time setup.
 
