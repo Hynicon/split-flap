@@ -1,0 +1,1 @@
+{"error":{"message":"Error validating access token: The user has not authorized application.","type":"OAuthException","code":190,"error_subcode":458,"fbtrace_id":"AbCdEf"}}

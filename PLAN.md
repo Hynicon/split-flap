@@ -65,18 +65,20 @@ All three require an account type and token setup **done once by the user**; the
 - API: **Instagram API with Instagram Login**.
 - Count: `GET https://graph.instagram.com/me?fields=username,followers_count&access_token=TOKEN`
 - Token: long-lived, ~60 days. Refresh: `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=TOKEN` (token must be ≥24 h old and not expired). Device refreshes every ~30 days.
-- App can stay in Development mode if the user's IG account is added as a tester/role on the Meta app — no app review needed for own account. **VERIFY** scope name (`instagram_business_basic`) and current API version in Meta docs.
+- App can stay in Development mode if the user's IG account is added as a tester/role on the Meta app — no app review needed for own account.
+- *Checked 2026-10-16 against Meta docs:* the scope is `instagram_business_basic` (the old scope names were deprecated 2025-01-27). The host is `graph.instagram.com`, and the docs' examples use `v26.0`. The code uses `META_GRAPH_VERSION` in `firmware/master/src/sources/Source.h`. Exchanges: code → `POST api.instagram.com/oauth/access_token`; short-lived → long-lived via `GET graph.instagram.com/access_token?grant_type=ig_exchange_token`. The redirect URI must be HTTPS and registered, so the CLI asks the user to paste the redirected URL.
 
 ### Facebook — Pages only (personal profile follower counts are not available via API)
 - Count: `GET https://graph.facebook.com/vXX.X/{PAGE_ID}?fields=name,followers_count&access_token=PAGE_TOKEN`
 - Token: Page token derived from a **long-lived user token** has no expiry (invalidated if the admin changes password or revokes the app). Device does not refresh; on `OAuthException`/code 190 → show error + flag "re-auth needed" in web UI.
-- **VERIFY** current Graph API version and required permission (likely `pages_read_engagement`).
+- *Checked 2026-10-16:* the current Graph API is **v26.0** (released 2026-07-29), and v25.0 is supported until 2028. The CLI requests `pages_show_list` + `pages_read_engagement`. Meta's docs don't spell out which permission gates `followers_count` on a Page: **still VERIFY** with a real Page. If the count comes back missing, also try `read_insights`.
 
 ### TikTok — hardest
 - API: TikTok for Developers, Login Kit + `user.info.stats` scope (follower_count moved there from `user.info.basic` in 2024).
 - Count: `GET https://open.tiktokapis.com/v2/user/info/?fields=display_name,follower_count` with header `Authorization: Bearer ACCESS_TOKEN`
 - Tokens: access token ~24 h, refresh token ~365 days. Refresh: `POST https://open.tiktokapis.com/v2/oauth/token/` form `client_key, client_secret, grant_type=refresh_token, refresh_token`. Device refreshes when access token is <2 h from expiry; store the **new** refresh token each time.
-- **VERIFY:** whether a Sandbox app can authorize the user's own account without public app review; whether redirect URIs must be HTTPS (if so, use a GitHub Pages page that just displays the `code` query parameter); whether PKCE is required.
+- *Checked 2026-10-16:* Login Kit **for Web** requires absolute `https` redirect URIs. Login Kit **for Desktop** only allows `http://localhost`/`127.0.0.1` with a port, and **requires PKCE**, with `code_challenge` = **hex**-encoded SHA-256 of the verifier (not base64url as in RFC 7636). The CLI uses the Desktop flow with a local callback server. No GitHub Pages page is needed.
+- **Still VERIFY:** whether a Sandbox app can authorize the user's own account (added as a sandbox target user) without app review, and whether `user.info.stats` is grantable in Sandbox. If not, ship with TikTok on `manual`.
 - If TikTok approval turns out impossible: ship with TikTok disabled; leave a `manual` source where the user types the count in the web UI. Do not scrape.
 
 ### Token bootstrap

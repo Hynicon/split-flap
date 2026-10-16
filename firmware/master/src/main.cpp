@@ -3,9 +3,15 @@
 
 #include "charset.h"
 #include "display/FlapBus.h"
+#include "sources/Source.h"
 
 static const uint8_t UNITS = 9;
 static FlapBus bus;
+static TokenStore tokens;
+static InstagramSource instagram(tokens);
+static FacebookSource facebook(tokens);
+static TikTokSource tiktok(tokens);
+static Source* const SOURCES[] = {&tiktok, &instagram, &facebook};
 
 // Temporary bring-up helper: type a line in the serial monitor to show it on the units.
 static void handleSerial() {
@@ -19,6 +25,11 @@ static void handleSerial() {
     }
     if (line == "!scan") {
       bus.scan();
+    } else if (line == "!fetch") {
+      for (Source* src : SOURCES) {
+        FetchResult r = src->fetch();
+        Serial.printf("[%s] %s %llu %s\n", src->id(), fetchStatusName(r.status), r.followers, r.error.c_str());
+      }
     } else if (line == "!rehome") {
       bus.rehomeAll();
     } else {
