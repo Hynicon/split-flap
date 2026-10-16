@@ -35,17 +35,18 @@ Known upstream problems to handle:
 ### Hardware changes vs upstream
 - **Replace ESP-01 master with an ESP32** (ESP32 DevKit or ESP32-C3 SuperMini, ~$3–5). Reasons: enough RAM for 3 TLS connections, real debug serial, free pins. Units and PCBs stay unchanged.
 - **I2C level shifting:** ESP32 is 3.3 V and **not 5 V tolerant**; Nanos' `Wire` enables internal pull-ups to 5 V. Use a BSS138 bi-directional level shifter (~$0.50) between ESP32 and the bus, *or* disable AVR internal pull-ups in unit firmware and use external 4.7 kΩ pull-ups to 3.3 V. Pick the level shifter (safer).
-- **Unit count: 8** (configurable): 1 label unit + 7 digit units.
-- **Power:** 5 V ≥ 3 A supply. 8 × 28BYJ-48 can draw ~2 A when all move at once. Add a 1000 µF cap on the 5 V rail.
+- **Unit count: 9** (configurable, decided 2026-10-16): 2 label units + 7 digit units.
+- **Power:** 5 V ≥ 3 A supply. 9 × 28BYJ-48 can draw ~2.2 A when all move at once. Add a 1000 µF cap on the 5 V rail.
+- **Flaps:** the default 45-flap set (blank, A–Z, `$ & #`, 0–9, `: . - ? !`). There are no accented flaps. Text input is folded instead: Portuguese and other Latin-1 accents become the base letter (`ã→A`, `ç→C`), and anything without a flap becomes blank.
 
-### Display layout (8 units)
+### Display layout (9 units)
 ```
-[ L ][ d ][ d ][ d ][ d ][ d ][ d ][ d ]
-  ^ platform letter: T = TikTok, I = Instagram, F = Facebook
+[ L ][ L ][ d ][ d ][ d ][ d ][ d ][ d ][ d ]
+  ^ platform label: TT = TikTok, IG = Instagram, FB = Facebook
 ```
 - Count right-aligned in the digit units, leading blanks (not zeros).
-- If the count doesn't fit: abbreviate using the `.` flap and `K`/`M` letters, e.g. `12.34M`, `987.6K`. Must never show a wrong-looking number — round down.
-- Optional `LABEL_WIDTH = 2` → `TT`, `IG`, `FB` + 6 digits.
+- If the count doesn't fit: abbreviate using the `.` flap and `K`/`M`/`B` letters, e.g. `12.34M`, `987.6K`, with at most 2 decimals and never wider than the digit units. Must never show a wrong-looking number, so always round down.
+- `LABEL_WIDTH = 1` → `T`, `I`, `F` + 8 digits (or 8 units with 7 digits).
 - Error state for a platform: show label + `-------` (dashes) only if there has **never** been a good value; otherwise keep showing the last good value.
 
 ### Behaviour
@@ -149,7 +150,8 @@ split-flap-social/
 - `String formatCount(uint64_t n, uint8_t width)` → right-aligned digits, or abbreviated `K`/`M`/`B` with `.`, always rounding **down**, never exceeding `width`.
 - `String composeFrame(Platform p, std::optional<uint64_t> count, Config c)` → full string for all units (label + count / dashes).
 
-Tests (`pio test -e native`) must cover: 0, 9, 1234567 (width 7), 9999999, 10000000 → `10.00M`/fits width, 999999 at width 6, 1234 at width 3 → `1.2K`, rounding-down edge cases (`9999` at width 4 vs 3 → `9.9K` not `10K`), label width 1 vs 2, missing count → dashes.
+Tests (`pio test -e native`) must cover: 0, 9, 1234567 (width 7), 9999999, 10000000 → `10.00M`/fits width, 999999 at width 6, 1234 at width 3, rounding-down edge cases (`9999` at width 4 vs 3), label width 1 vs 2, missing count → dashes.
+> Correction (implemented in `test/test_layout`): the `.` is a flap too. That means `1.2K` and `9.9K` are 4 characters and can't fit in width 3. The rule "never exceed width" wins, so 1234 and 9999 at width 3 both give ` 1K`/` 9K`, rounded down and never `10K`.
 
 **Done when:** all native tests pass.
 
