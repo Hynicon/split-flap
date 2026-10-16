@@ -27,6 +27,8 @@ class App {
   std::string updateTokens(const std::string& json);
   std::string showText(const std::string& text, const std::string& align);
   void requestRehome();
+  // Temporary message that is not saved to settings (e.g. "SETUP" while the Wi-Fi portal is open).
+  void setOverlay(const std::string& text);
   bool checkAdminKey(const String& key);
   bool adminKeySet();
   void setAdminKey(const std::string& key);  // from the setup portal
@@ -71,4 +73,5 @@ class App {
   int celebrate_ = -1;         // platform whose milestone is being celebrated
   bool celebrateBlankShown_ = false;
   std::string tzApplied_;
+  std::string overlay_;
 };

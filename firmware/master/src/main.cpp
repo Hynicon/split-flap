@@ -1,8 +1,9 @@
 // Split-flap social follower counter — ESP32 master.
 #include <Arduino.h>
-#include <WiFi.h>
 
 #include "app/App.h"
+#include "net/Network.h"
+#include "web/WebServer.h"
 
 static App app;
 
@@ -35,9 +36,8 @@ void setup() {
   delay(200);
   Serial.printf("\n[boot] split-flap master, reset reason %d\n", (int)esp_reset_reason());
   app.begin();
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin();  // credentials stored in NVS by the setup portal
+  Network::begin(app);  // may block in the setup portal
+  Web::begin(app);
 }
 
 void loop() {

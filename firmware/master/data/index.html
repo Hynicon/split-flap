@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Split-Flap Counter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Split-Flap Counter</h1>
+    <div id="frame" class="flaps" aria-label="Current display"></div>
+  </header>
+
+  <nav role="tablist">
+    <button role="tab" data-tab="status" aria-selected="true">Status</button>
+    <button role="tab" data-tab="settings">Settings</button>
+    <button role="tab" data-tab="tokens">Tokens</button>
+  </nav>
+
+  <main>
+    <section id="tab-status">
+      <table class="platforms">
+        <thead><tr><th>Platform</th><th>Followers</th><th>Last update</th><th>Status</th><th>Token expires</th></tr></thead>
+        <tbody id="platform-rows"></tbody>
+      </table>
+      <p id="device-info" class="muted"></p>
+      <p id="bus-info" class="muted"></p>
+      <div class="row">
+        <button id="rehome" class="secondary">Re-home all units</button>
+      </div>
+    </section>
+
+    <section id="tab-settings" hidden>
+      <form id="settings-form">
+        <fieldset>
+          <legend>Platforms</legend>
+          <div id="platform-settings"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Display</legend>
+          <label>Mode
+            <select name="mode">
+              <option value="cycle">Cycle between platforms</option>
+              <option value="single">Single platform</option>
+              <option value="text">Text message</option>
+              <option value="off">Off (all blank)</option>
+            </select>
+          </label>
+          <label>Single platform
+            <select name="single">
+              <option value="tiktok">TikTok</option>
+              <option value="instagram">Instagram</option>
+              <option value="facebook">Facebook</option>
+            </select>
+          </label>
+          <label>Text <input name="text" maxlength="64" placeholder="Accents are folded: ã → A"></label>
+          <label>Text alignment
+            <select name="text_align"><option>left</option><option>center</option><option>right</option></select>
+          </label>
+          <label>Units <input name="units" type="number" min="1" max="16"></label>
+          <label>Label width
+            <select name="label_width"><option value="2">2 (TT / IG / FB)</option><option value="1">1 (T / I / F)</option></select>
+          </label>
+          <label>Speed (rpm) <input name="speed" type="number" min="1" max="12"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Timing</legend>
+          <label>Fetch every (minutes) <input name="poll_minutes" type="number" min="5" max="1440"></label>
+          <label>Switch platform every (seconds) <input name="cycle_seconds" type="number" min="20" max="3600"></label>
+          <label>Quiet hours start <input name="quiet_start" type="time"></label>
+          <label>Quiet hours end <input name="quiet_end" type="time"></label>
+          <label>Time zone (POSIX TZ) <input name="timezone" placeholder="WET0WEST,M3.5.0/1,M10.5.0"></label>
+          <p class="muted">Same start and end time means no quiet hours. During quiet hours the flaps don't move.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Milestones</legend>
+          <label class="check"><input name="celebrate" type="checkbox"> Flash the display when a milestone is crossed</label>
+          <label>Every <input name="milestone_step" type="number" min="1"> followers</label>
+        </fieldset>
+        <button type="submit">Save settings</button>
+      </form>
+    </section>
+
+    <section id="tab-tokens" hidden>
+      <p class="muted">Easiest: run <code>python -m auth &lt;platform&gt;</code> from <code>tools/</code>, which sends tokens here for you. Or paste a token below. Tokens are only ever shown masked.</p>
+      <form id="token-form">
+        <label>Platform
+          <select name="platform">
+            <option value="instagram">Instagram</option>
+            <option value="facebook">Facebook</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+        </label>
+        <label>Access token <input name="access_token" type="password" autocomplete="off"></label>
+        <label data-for="facebook">Page ID <input name="page_id" autocomplete="off"></label>
+        <label data-for="tiktok">Refresh token <input name="refresh_token" type="password" autocomplete="off"></label>
+        <label data-for="tiktok">Client key <input name="client_key" autocomplete="off"></label>
+        <label data-for="tiktok">Client secret <input name="client_secret" type="password" autocomplete="off"></label>
+        <div class="row">
+          <button type="submit">Save token</button>
+          <button type="button" id="clear-token" class="danger">Clear this platform's tokens</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <label>Admin key <input id="admin-key" type="password" autocomplete="current-password" placeholder="needed to save changes"></label>
+    <span id="toast" role="status" aria-live="polite"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

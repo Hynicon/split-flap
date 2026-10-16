@@ -122,6 +122,7 @@ std::string App::desiredFrame(uint32_t now) {
   const uint8_t units = cfg_.frame.units;
   const std::string blank(units, ' ');
 
+  if (!overlay_.empty()) return composeText(overlay_, units, Align::Center);
   if (celebrate_ >= 0) {
     if (!celebrateBlankShown_) {
       if (bus_.shown() == blank && !bus_.busy()) {
@@ -298,6 +299,12 @@ std::string App::showText(const std::string& text, const std::string& align) {
   std::string json;
   serializeJson(doc, json);
   return updateConfig(json);
+}
+
+void App::setOverlay(const std::string& text) {
+  Lock lock(mu_);
+  overlay_ = text;
+  forceRefresh_ = true;
 }
 
 void App::requestRehome() {
