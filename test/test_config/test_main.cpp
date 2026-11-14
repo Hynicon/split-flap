@@ -70,6 +70,11 @@ void test_invalid_rejected_atomically() {
       R"({"date_lang":"fr"})",
       R"({"remote_url":"flap.example.com"})",
       R"({"remote_url":"ftp://flap.example.com"})",
+      R"({"remote_url":"http://flap.example.com"})",            // the token would cross the internet in clear
+      R"({"remote_url":"http://192.168.1.5@flap.example.com"})",  // the real host is after the @
+      R"({"remote_url":"http://172.32.0.1"})",
+      R"({"remote_url":"http://8.8.8.8:8000"})",
+      R"({"remote_url":"http://192.168.1.5.example.com"})",
   };
   for (const char* json : bad) {
     std::string before = configToJson(c, true);
@@ -137,6 +142,12 @@ void test_remote_settings() {
   TEST_ASSERT_TRUE(pub.find("device-token-1") == std::string::npos);
   TEST_ASSERT_TRUE(pub.find("\"remote_token_set\":true") != std::string::npos);
   TEST_ASSERT_TRUE(configToJson(c, true).find("device-token-1") != std::string::npos);
+  // plain http only for a test server on the local network
+  for (const char* ok : {"http://192.168.1.5:8000", "http://10.0.0.2/", "http://172.20.1.1", "http://localhost:8000",
+                         "http://laptop.local:8000", "http://127.0.0.1:8000"}) {
+    std::string json = std::string(R"({"remote_url":")") + ok + "\"}";
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("", applyConfigJson(c, json).c_str(), ok);
+  }
   TEST_ASSERT_EQUAL_STRING("", applyConfigJson(c, R"({"remote_url":""})").c_str());  // empty switches the relay off
   TEST_ASSERT_EQUAL_STRING("", c.remoteUrl.c_str());
 }

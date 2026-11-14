@@ -195,7 +195,7 @@ phone ──HTTPS──► nginx-proxy ──► split-flap server (Docker)
 
 **Set up the server** (Docker, behind [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy)):
 1. Copy `server/.env.example` to `server/.env` and fill it in:
-   - `APP_PASSWORD`: the password for the app's sign-in page. It faces the internet, so make it long.
+   - `APP_PASSWORD`: the password for the app's sign-in page. It faces the internet, so make it long: 16 or more random characters. Five wrong passwords lock out only the address they came from, so that nobody can lock you out by guessing, and the length is what stops guessing from many addresses.
    - `DEVICE_TOKEN`: a random secret for the display, for example from `openssl rand -hex 24`.
    - `VIRTUAL_HOST`: the hostname nginx-proxy should route, e.g. `flap.example.com`. Set `LETSENCRYPT_HOST` too if you use acme-companion.
    - `PROXY_NETWORK`: the Docker network your nginx-proxy is on.
@@ -208,7 +208,7 @@ phone ──HTTPS──► nginx-proxy ──► split-flap server (Docker)
 
 Don't publish a port: nginx-proxy reaches the container over the shared network.
 
-The server must be reached over **HTTPS**: the display checks the certificate, and the password and token would otherwise travel in the clear.
+The server must be reached over **HTTPS**: the display checks the certificate, and the password and token would otherwise travel in the clear. The display refuses an `http://` address unless it is on the local network (for testing against a server on your PC).
 
 **Point the display at it**, either way:
 - on the display's own page (same Wi-Fi): **Settings → App server**, enter `https://<your hostname>` and the device token; or

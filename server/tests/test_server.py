@@ -34,14 +34,15 @@ def free_port() -> int:
 
 
 class Server:
-    def __init__(self, data: Path) -> None:
+    def __init__(self, data: Path, **env: str) -> None:
         self.data = data
+        self.env = env
         self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         self.proc: subprocess.Popen | None = None
 
     def start(self) -> None:
-        env = dict(os.environ, APP_PASSWORD=PASSWORD, DEVICE_TOKEN=TOKEN, DATA_DIR=str(self.data), HOLD_SECONDS=str(HOLD))
+        env = dict(os.environ, APP_PASSWORD=PASSWORD, DEVICE_TOKEN=TOKEN, DATA_DIR=str(self.data), HOLD_SECONDS=str(HOLD), **self.env)
         self.proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "app:app", "--port", str(self.port), "--log-level", "warning", "--no-proxy-headers"],
                                      cwd=SERVER_DIR, env=env)
         for _ in range(100):
@@ -143,6 +144,25 @@ def test_made_up_forwarding_header_does_not_dodge_the_lockout(server):
         httpx.post(server.url + "/login", data={"password": "nope"}, headers={"X-Forwarded-For": f"10.0.0.{i}"}, timeout=10)
     r = httpx.post(server.url + "/login", data={"password": PASSWORD}, headers={"X-Forwarded-For": "10.9.9.9"})
     assert r.status_code == 429
+
+
+def test_guesses_from_many_addresses_do_not_lock_out_the_owner(tmp_path):
+    s = Server(tmp_path, TRUST_PROXY="1")
+    s.start()
+    try:
+        def guess(i: int) -> None:
+            for _ in range(5):
+                httpx.post(s.url + "/login", data={"password": "nope"}, headers={"X-Forwarded-For": f"10.0.{i}.1"}, timeout=20)
+        threads = [threading.Thread(target=guess, args=(i,)) for i in range(10)]  # 50 wrong passwords
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        # each guessing address is locked out, but someone elsewhere can still sign in
+        assert httpx.post(s.url + "/login", data={"password": PASSWORD}, headers={"X-Forwarded-For": "10.0.3.1"}).status_code == 429
+        assert httpx.post(s.url + "/login", data={"password": PASSWORD}, headers={"X-Forwarded-For": "10.9.9.9"}).status_code == 303
+    finally:
+        s.stop()
 
 
 def test_signed_in_session_survives_a_lockout(server):

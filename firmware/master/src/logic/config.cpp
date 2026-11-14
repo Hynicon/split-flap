@@ -1,7 +1,9 @@
 #include "logic/config.h"
 
 #include <ArduinoJson.h>
+#include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 
 static const char* const MODE_NAMES[DISPLAY_MODE_COUNT] = {"cycle", "single", "text", "off", "random", "clock", "date", "mix"};
 static const char* const MIX_NAMES[MIX_KIND_COUNT] = {"followers", "random", "text", "clock", "date"};
@@ -142,6 +144,25 @@ static bool readList(JsonVariantConst v, size_t maxItems, size_t maxBytes, std::
   return true;
 }
 
+// True for a URL remainder ("host[:port][/path]") whose host is on the local network:
+// localhost, a .local name, or a private, loopback or link-local IPv4 address.
+static bool isLocalHost(const std::string& rest) {
+  std::string host = rest.substr(0, rest.find_first_of("/?#"));
+  if (host.find('@') != std::string::npos) return false;  // user@host could hide the real host
+  host = host.substr(0, host.find(':'));
+  for (char& ch : host) ch = (char)tolower((unsigned char)ch);
+  auto endsWith = [&](const char* s) {
+    size_t n = strlen(s);
+    return host.size() > n && host.compare(host.size() - n, n, s) == 0;
+  };
+  if (host == "localhost" || endsWith(".local")) return true;
+  unsigned a, b, c, d;
+  char tail;
+  if (sscanf(host.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255)
+    return false;
+  return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31) || (a == 169 && b == 254);
+}
+
 std::string applyConfigJson(Config& live, const std::string& json) {
   JsonDocument doc;
   if (DeserializationError e = deserializeJson(doc, json)) return std::string("invalid json: ") + e.c_str();
@@ -260,8 +281,10 @@ std::string applyConfigJson(Config& live, const std::string& json) {
   if (!doc["remote_url"].isNull()) {
     std::string u = doc["remote_url"] | "";
     while (!u.empty() && u.back() == '/') u.pop_back();
-    bool scheme = u.rfind("https://", 0) == 0 || u.rfind("http://", 0) == 0;
-    if (u.size() > 200 || (!u.empty() && !scheme)) return "remote_url must start with https:// or http://";
+    bool https = u.rfind("https://", 0) == 0, http = u.rfind("http://", 0) == 0;
+    if (u.size() > 200 || (!u.empty() && !https && !http)) return "remote_url must start with https://";
+    // The device token travels in every request, so plain http is only for a test server on the local network.
+    if (http && !isLocalHost(u.substr(7))) return "remote_url must use https:// unless the server is on the local network";
     c.remoteUrl = u;
   }
   if (!doc["remote_token"].isNull()) {

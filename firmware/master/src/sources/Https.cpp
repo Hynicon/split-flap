@@ -7,6 +7,48 @@ extern const uint8_t x509_crt_bundle_start[] asm("_binary_firmware_master_certs_
 
 static const size_t MAX_BODY = 8 * 1024;  // follower responses are a few hundred bytes
 
+// Collects a response body and refuses bytes past its limit, so a chunked or lying
+// reply can't grow the heap: HTTPClient stops reading when a write comes up short.
+class CappedSink : public Stream {
+ public:
+  CappedSink(std::string& out, size_t cap) : out_(out), cap_(cap) {}
+  size_t write(uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t* buf, size_t n) override {
+    if (out_.size() + n > cap_) {
+      overflow_ = true;
+      return 0;
+    }
+    out_.append((const char*)buf, n);
+    return n;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+  bool overflowed() const { return overflow_; }
+
+ private:
+  std::string& out_;
+  size_t cap_;
+  bool overflow_ = false;
+};
+
+// Reads the body into r.body, at most cap bytes. An oversized body leaves it empty with code HTTP_TOO_BIG.
+static const int HTTP_TOO_BIG = -101;
+static void readBody(HTTPClient& http, HttpResponse& r, size_t cap) {
+  int len = http.getSize();
+  if (len > 0 && (size_t)len > cap) {
+    r.code = HTTP_TOO_BIG;
+    return;
+  }
+  CappedSink sink(r.body, cap);
+  int got = http.writeToStream(&sink);
+  if (sink.overflowed() || got < 0) {
+    r.body.clear();
+    if (sink.overflowed()) r.code = HTTP_TOO_BIG;
+  }
+}
+
 static HttpResponse request(const char* method, const String& url, const String& bearer, const String* form) {
   HttpResponse r;
   WiFiClientSecure client;
@@ -31,12 +73,8 @@ static HttpResponse request(const char* method, const String& url, const String&
     r.code = http.sendRequest(method);
   }
   if (r.code > 0) {
-    int len = http.getSize();
-    if (len < 0 || (size_t)len <= MAX_BODY) {
-      String body = http.getString();
-      r.body.assign(body.c_str(), body.length() > MAX_BODY ? MAX_BODY : body.length());
-    }
     r.retryAfterSec = http.header("Retry-After").toInt();
+    readBody(http, r, MAX_BODY);
   }
   http.end();
   return r;
@@ -51,6 +89,7 @@ HttpResponse httpPostJson(const String& url, const String& bearer, const std::st
   HttpResponse r;
   WiFiClientSecure tls;
   WiFiClient plain;
+  // Plain http is only reachable for a local test server: applyConfigJson refuses it for anything else.
   const bool secure = url.startsWith("https://");
   if (secure) tls.setCACertBundle(x509_crt_bundle_start);
   WiFiClient& client = secure ? static_cast<WiFiClient&>(tls) : plain;
@@ -67,13 +106,7 @@ HttpResponse httpPostJson(const String& url, const String& bearer, const std::st
   http.addHeader("Authorization", "Bearer " + bearer);
   http.addHeader("Content-Type", "application/json");
   r.code = http.POST((uint8_t*)json.data(), json.size());
-  if (r.code > 0) {
-    int len = http.getSize();
-    if (len < 0 || (size_t)len <= MAX_REPLY) {
-      String body = http.getString();
-      r.body.assign(body.c_str(), body.length() > MAX_REPLY ? MAX_REPLY : body.length());
-    }
-  }
+  if (r.code > 0) readBody(http, r, MAX_REPLY);
   http.end();
   return r;
 }

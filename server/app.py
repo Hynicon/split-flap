@@ -185,12 +185,15 @@ def is_https(request: Request) -> bool:
     return request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
 
 
-# Wrong passwords, from the sign-in form and from the X-Admin-Key header alike: per address, and
-# in total so that spreading guesses over many addresses doesn't help. A valid session cookie is
-# checked first, so someone already signed in is never locked out.
+# Wrong passwords, from the sign-in form and from the X-Admin-Key header alike, lock out the
+# address they came from. There is deliberately no lockout across all addresses: anyone could then
+# keep the owner from signing in. Guesses spread over many addresses are slowed by the per-address
+# limit and the 1 s delay on each wrong password, and a long APP_PASSWORD makes them hopeless.
+# A valid session cookie is checked first, so someone already signed in is never locked out.
 FAILS: dict[str, list[float]] = {}  # address -> times of recent wrong passwords
-ALL = "*"
-MAX_FAILS, MAX_FAILS_TOTAL, FAIL_WINDOW = 5, 30, 300
+ALL = "*"  # every wrong password, for the warning in the log only
+MAX_FAILS, WARN_FAILS_TOTAL, FAIL_WINDOW = 5, 30, 300
+_warned_at = 0.0
 
 
 def recent_fails(key: str) -> int:
@@ -203,13 +206,22 @@ def recent_fails(key: str) -> int:
 
 
 def locked_out(ip: str) -> bool:
-    return recent_fails(ip) >= MAX_FAILS or recent_fails(ALL) >= MAX_FAILS_TOTAL
+    return recent_fails(ip) >= MAX_FAILS
 
 
 def wrong_password(ip: str) -> None:
+    global _warned_at
     now = time.time()
     FAILS.setdefault(ip, []).append(now)
     FAILS.setdefault(ALL, []).append(now)
+    if len(FAILS) > 10000:  # many addresses: forget the oldest rather than grow without end
+        for key in list(FAILS)[:5000]:
+            if key != ALL:
+                FAILS.pop(key, None)
+    if recent_fails(ALL) >= WARN_FAILS_TOTAL and now - _warned_at > FAIL_WINDOW:
+        _warned_at = now
+        print(f"WARNING: {recent_fails(ALL)} wrong passwords in the last {FAIL_WINDOW // 60} minutes "
+              f"from {len(FAILS) - 1} addresses", flush=True)
 
 
 def logged_in(request: Request) -> bool:
