@@ -177,6 +177,24 @@ def test_guesses_from_many_addresses_do_not_lock_out_the_owner(tmp_path):
         s.stop()
 
 
+def test_full_failure_table_refuses_new_networks_instead_of_forgetting(tmp_path):
+    s = Server(tmp_path, TRUST_PROXY="1", MAX_NETWORKS="3")
+    s.start()
+    try:
+        def login(ip: str, password: str = PASSWORD) -> int:
+            return httpx.post(s.url + "/login", data={"password": password}, headers={"X-Forwarded-For": ip}, timeout=20).status_code
+        assert login("10.50.0.1") == 303  # this network is now trusted
+        for i in range(3):
+            assert login(f"10.0.{i}.1", "nope") == 401  # fills the table
+        assert login("10.0.9.1") == 429  # new network, table full: refused
+        for _ in range(4):
+            login("10.0.0.1", "nope")
+        assert login("10.0.0.1") == 429  # its lockout was kept
+        assert login("10.50.0.1") == 303  # a trusted network still gets in
+    finally:
+        s.stop()
+
+
 def test_signed_in_session_survives_a_lockout(server):
     client = signed_in(server)
     for i in range(6):

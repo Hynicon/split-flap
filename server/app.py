@@ -197,6 +197,9 @@ def is_https(request: Request) -> bool:
 # network with two wrong passwords is locked out, so each new network an attacker brings gets two
 # guesses instead of five.
 #
+# At most MAX_NETWORKS guessing networks are tracked. When that many are live, networks not yet in
+# the table (and not trusted) are refused until entries expire, rather than forgetting a lockout.
+#
 # Phone carriers put many customers behind shared addresses, so the owner may share a network with
 # a guesser. Networks that signed in successfully in the last 30 days are therefore exempt from the
 # attack rule, and a valid session cookie is checked before any of this, so someone already signed
@@ -205,7 +208,7 @@ FAILS: OrderedDict[str, list[float]] = OrderedDict()  # network -> times of rece
 ALL_FAILS: deque[float] = deque()  # times of every recent wrong password
 TRUSTED: OrderedDict[str, float] = OrderedDict()  # network -> time of its last good sign-in
 MAX_FAILS, ATTACK_FAILS, ATTACK_LOCK, FAIL_WINDOW = 5, 30, 2, 300
-MAX_NETWORKS, TRUST_SECONDS = 20000, 30 * 86400
+MAX_NETWORKS, TRUST_SECONDS = int(os.environ.get("MAX_NETWORKS", "20000")), 30 * 86400
 _warned_at = _pruned_at = 0.0
 
 
@@ -236,9 +239,15 @@ def trusted(key: str) -> bool:
     return t is not None and time.time() - t < TRUST_SECONDS
 
 
+def table_full() -> bool:
+    return len(FAILS) >= MAX_NETWORKS
+
+
 def locked_out(ip: str) -> bool:
     key = fail_key(ip)
     n = recent_fails(key)
+    if n == 0 and table_full() and not trusted(key):
+        return True  # too many guessing networks to track: new ones wait until entries expire
     return n >= MAX_FAILS or (n >= ATTACK_LOCK and under_attack() and not trusted(key))
 
 
@@ -254,14 +263,15 @@ def wrong_password(ip: str) -> None:
     global _warned_at, _pruned_at
     now = time.time()
     key = fail_key(ip)
-    FAILS[key] = FAILS.pop(key, []) + [now]  # moves the network to the newest end
     ALL_FAILS.append(now)
-    if len(FAILS) > MAX_NETWORKS and now - _pruned_at > 10:  # prune at most every 10 s
+    if table_full() and now - _pruned_at > 10:  # prune at most every 10 s
         _pruned_at = now
         for k in list(FAILS):
             recent_fails(k)
-    while len(FAILS) > MAX_NETWORKS:  # still full of live entries: forget the least recent network
-        FAILS.popitem(last=False)
+    # Live entries are never dropped: when the table is full, a network not in it is not added
+    # (and locked_out refuses it), so memory stays bounded without forgetting anyone's lockout.
+    if key in FAILS or not table_full():
+        FAILS[key] = FAILS.pop(key, []) + [now]
     if under_attack() and now - _warned_at > FAIL_WINDOW:
         _warned_at = now
         print(f"WARNING: {len(ALL_FAILS)} wrong passwords in the last {FAIL_WINDOW // 60} minutes "
