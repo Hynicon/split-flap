@@ -3,6 +3,7 @@
 
 #include "app/App.h"
 #include "net/Network.h"
+#include "net/Remote.h"
 #include "web/WebServer.h"
 
 static App app;
@@ -38,6 +39,7 @@ void setup() {
   app.begin();
   Network::begin(app);  // may block in the setup portal
   Web::begin(app);
+  Remote::begin(app);
 }
 
 void loop() {

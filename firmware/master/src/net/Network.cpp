@@ -1,5 +1,6 @@
 #include "net/Network.h"
 
+#include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
@@ -34,6 +35,11 @@ void Network::begin(App& app) {
   WiFiManagerParameter adminKey("admin_key", "Admin key (8-64 chars, needed to change settings)", "", 64,
                                 "type='password' minlength='8'");
   wm.addParameter(&adminKey);
+  // Optional: the relay server that makes the app reachable from anywhere (see README, "Remote app").
+  WiFiManagerParameter remoteUrl("remote_url", "App server address, e.g. https://flap.example.com (optional)", "", 200);
+  WiFiManagerParameter remoteToken("remote_token", "App server device token (optional)", "", 128, "type='password'");
+  wm.addParameter(&remoteUrl);
+  wm.addParameter(&remoteToken);
   wm.setConfigPortalTimeout(300);
   wm.setAPCallback([](WiFiManager*) {
     Serial.printf("[wifi] setup portal open: join Wi-Fi \"%s\" and browse to 192.168.4.1\n", PORTAL_SSID);
@@ -60,6 +66,16 @@ void Network::begin(App& app) {
     Serial.println("[wifi] admin key saved");
   } else if (!app.adminKeySet()) {
     Serial.println("[wifi] WARNING: no admin key set - settings can't be changed. Hold BOOT at power-on to set one.");
+  }
+  // Same rule as the admin key: only from a portal that physical access opened. Empty fields change nothing.
+  if (setupAllowed && (strlen(remoteUrl.getValue()) || strlen(remoteToken.getValue()))) {
+    JsonDocument doc;
+    if (strlen(remoteUrl.getValue())) doc["remote_url"] = remoteUrl.getValue();
+    if (strlen(remoteToken.getValue())) doc["remote_token"] = remoteToken.getValue();
+    std::string json;
+    serializeJson(doc, json);
+    std::string err = app.updateConfig(json);
+    Serial.printf("[wifi] app server settings %s%s\n", err.empty() ? "saved" : "rejected: ", err.c_str());
   }
 
   if (!connected) {

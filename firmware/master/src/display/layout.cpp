@@ -13,8 +13,10 @@ const char* platformId(Platform p) {
   return "";
 }
 
-std::string platformLabel(Platform p, uint8_t labelWidth) {
+std::string platformLabel(Platform p, uint8_t labelWidth, bool logos) {
   static const char* const LABELS[PLATFORM_COUNT] = {"TT", "IG", "FB"};
+  static const char LOGOS[PLATFORM_COUNT] = {FLAP_TIKTOK, FLAP_INSTAGRAM, FLAP_FACEBOOK};
+  if (logos) return std::string(1, LOGOS[(uint8_t)p]) + std::string(labelWidth - 1, ' ');
   std::string label = LABELS[(uint8_t)p];
   if (labelWidth == 1) return label.substr(0, 1);  // T / I / F
   label.resize(labelWidth, ' ');
@@ -49,13 +51,13 @@ std::string formatCount(uint64_t n, uint8_t width) {
     out += u.suffix;
     return padLeft(out, width);
   }
-  return std::string(width, '-');
+  return std::string(width, ' ');
 }
 
 std::string composeFrame(Platform p, std::optional<uint64_t> count, const FrameConfig& c) {
-  std::string label = platformLabel(p, c.labelWidth);
+  std::string label = platformLabel(p, c.labelWidth, c.labelLogos);
   uint8_t digitWidth = c.units > label.size() ? c.units - label.size() : 0;
-  std::string body = count ? formatCount(*count, digitWidth) : std::string(digitWidth, '-');
+  std::string body = count ? formatCount(*count, digitWidth) : std::string(digitWidth, ' ');
   std::string frame = label + body;
   frame.resize(c.units, ' ');
   return frame;
@@ -78,4 +80,50 @@ std::string composeText(const std::string& utf8, uint8_t units, Align align) {
     case Align::Center: return std::string(pad / 2, ' ') + folded + std::string(pad - pad / 2, ' ');
   }
   return folded;
+}
+
+// The first candidate that fits, centred; blanks if none does.
+static std::string firstThatFits(const std::string* candidates, size_t count, uint8_t units) {
+  for (size_t i = 0; i < count; i++) {
+    if (candidates[i].size() <= units) return composeText(candidates[i], units, Align::Center);
+  }
+  return std::string(units, ' ');
+}
+
+std::string composeClock(uint8_t hour, uint8_t minute, bool h24, uint8_t units) {
+  if (hour > 23 || minute > 59) return std::string(units, ' ');
+  char mm[3] = {(char)('0' + minute / 10), (char)('0' + minute % 10), '\0'};
+  if (h24) {
+    char hh[3] = {(char)('0' + hour / 10), (char)('0' + hour % 10), '\0'};
+    const std::string forms[] = {std::string(hh) + " " + mm, std::string(hh) + mm};
+    return firstThatFits(forms, 2, units);
+  }
+  std::string h = std::to_string(hour % 12 == 0 ? 12 : hour % 12);
+  const std::string forms[] = {h + " " + mm + (hour < 12 ? " AM" : " PM"), h + " " + mm, h + mm};
+  return firstThatFits(forms, 3, units);
+}
+
+std::string composeDate(uint8_t day, uint8_t month, DateLang lang, uint8_t units) {
+  static const char* const EN[12] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+  static const char* const PT[12] = {"JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"};
+  if (day < 1 || day > 31 || month < 1 || month > 12) return std::string(units, ' ');
+  std::string d = std::to_string(day), m = (lang == DateLang::Pt ? PT : EN)[month - 1];
+  const std::string forms[] = {d + " " + m, d + m, m};
+  return firstThatFits(forms, 3, units);
+}
+
+std::string frameToUtf8(const std::string& frame) {
+  std::string out;
+  for (char ch : frame) {
+    uint8_t c = (uint8_t)ch;
+    if (c == (uint8_t)FLAP_INSTAGRAM) out += "\xEE\x80\x80";       // U+E000
+    else if (c == (uint8_t)FLAP_FACEBOOK) out += "\xEE\x80\x81";   // U+E001
+    else if (c == (uint8_t)FLAP_TIKTOK) out += "\xEE\x80\x82";     // U+E002
+    else if (c < 0x80) out += ch;
+    else {
+      out += (char)(0xC0 | (c >> 6));
+      out += (char)(0x80 | (c & 0x3F));
+    }
+  }
+  return out;
 }

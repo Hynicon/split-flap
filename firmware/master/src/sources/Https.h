@@ -15,5 +15,8 @@ struct HttpResponse {
 // Never log `url`, `bearer` or `formBody`: they may contain tokens.
 HttpResponse httpsGet(const String& url, const String& bearer = "");
 HttpResponse httpsPostForm(const String& url, const String& formBody);
+// JSON POST for the relay server, which may hold the request open (long-poll), hence the timeout.
+// Also accepts plain http:// URLs, for a relay on the local network.
+HttpResponse httpPostJson(const String& url, const String& bearer, const std::string& json, uint16_t timeoutSec);
 
 String urlEncode(const String& s);

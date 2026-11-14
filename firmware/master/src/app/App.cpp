@@ -101,6 +101,7 @@ void App::pollSources() {
       s.lastOkEpoch = epoch;
       s.nextFetchMs = millis() + backoffMinutes(0, cfg_.pollMinutes) * 60000UL;
       if (changed) ConfigStore::saveCount(p, r.followers, epoch);
+      // Only in the follower modes: a milestone must not interrupt a message, the clock or the mix.
       bool showing = cfg_.mode == DisplayMode::Cycle || (cfg_.mode == DisplayMode::Single && cfg_.single == p);
       if (cfg_.celebrate && showing && crossedMilestone(previous, r.followers, cfg_.milestoneStep)) {
         Serial.printf("[%s] milestone! %llu\n", src->id(), r.followers);
@@ -132,29 +133,32 @@ std::string App::desiredFrame(uint32_t now) {
       }
     }
     Platform p = (Platform)celebrate_;  // ...then flip straight to the new number
-    current_ = celebrate_;
-    cycleStartMs_ = now;
+    rotation_.jumpTo(p, now);
     celebrate_ = -1;
     return composeFrame(p, state_[(uint8_t)p].count, cfg_.frame);
   }
 
-  switch (cfg_.mode) {
-    case DisplayMode::Off:
-      return blank;
-    case DisplayMode::Text:
-      return composeText(cfg_.text, units, cfg_.textAlign);
-    case DisplayMode::Single:
-      return composeFrame(cfg_.single, state_[(uint8_t)cfg_.single].count, cfg_.frame);
-    case DisplayMode::Cycle:
-      break;
+  Scene scene = rotation_.update(cfg_, now);
+  switch (scene.kind) {
+    case SceneKind::Blank: break;
+    case SceneKind::Followers: return composeFrame(scene.platform, state_[(uint8_t)scene.platform].count, cfg_.frame);
+    case SceneKind::Word: return composeText(scene.word, units, cfg_.textAlign);
+    case SceneKind::Text: return composeText(cfg_.text, units, cfg_.textAlign);
+    case SceneKind::Clock: return clockFrame(false);
+    case SceneKind::Date: return clockFrame(true);
   }
-  bool currentEnabled = current_ >= 0 && ((cfg_.enabledMask >> current_) & 1);
-  if (!currentEnabled || now - cycleStartMs_ >= cfg_.cycleSeconds * 1000UL) {
-    current_ = nextPlatform(current_, cfg_.enabledMask, PLATFORM_COUNT);
-    cycleStartMs_ = now;
-  }
-  if (current_ < 0) return blank;
-  return composeFrame((Platform)current_, state_[current_].count, cfg_.frame);
+  return blank;
+}
+
+// The local time or date; blank until the clock has synced.
+std::string App::clockFrame(bool date) {
+  const uint8_t units = cfg_.frame.units;
+  if (!epochNow()) return std::string(units, ' ');
+  time_t t = time(nullptr);
+  struct tm local;
+  localtime_r(&t, &local);
+  if (date) return composeDate((uint8_t)local.tm_mday, (uint8_t)(local.tm_mon + 1), cfg_.dateLang, units);
+  return composeClock((uint8_t)local.tm_hour, (uint8_t)local.tm_min, cfg_.clock24h, units);
 }
 
 void App::updateDisplay() {
@@ -206,7 +210,7 @@ std::string App::statusJson() {
   doc["wifi"]["ip"] = WiFi.localIP().toString();
 
   Lock lock(mu_);
-  doc["display"]["frame"] = requested_;
+  doc["display"]["frame"] = frameToUtf8(requested_);
   doc["display"]["quiet"] = quietNow();
   doc["display"]["busy"] = bus_.busy();
   doc["bus"]["units"] = bus_.units();
@@ -251,7 +255,10 @@ std::string App::updateConfig(const std::string& json) {
   Config before = cfg_;
   std::string err = applyConfigJson(cfg_, json);
   if (!err.empty()) return err;
-  ConfigStore::save(cfg_);
+  ConfigStore::save(cfg_, &before);
+  configChanged_ = true;
+  if (cfg_.words != before.words) rotation_.wordsChanged();
+  if (cfg_.mix != before.mix) rotation_.restart();
   if (cfg_.frame.units != before.frame.units) unitsChanged_ = true;
   for (uint8_t i = 0; i < PLATFORM_COUNT; i++) {
     bool wasOn = (before.enabledMask >> i) & 1, isOn = (cfg_.enabledMask >> i) & 1;
@@ -330,4 +337,19 @@ void App::setAdminKey(const std::string& key) {
   Lock lock(mu_);
   cfg_.adminKey = key;
   ConfigStore::save(cfg_);
+  configChanged_ = true;
+}
+
+bool App::remoteSettings(std::string& url, std::string& token) {
+  Lock lock(mu_);
+  url = cfg_.remoteUrl;
+  token = cfg_.remoteToken;
+  return !url.empty() && !token.empty();
+}
+
+bool App::takeConfigChanged() {
+  Lock lock(mu_);
+  bool changed = configChanged_;
+  configChanged_ = false;
+  return changed;
 }

@@ -8,7 +8,7 @@
 
 static AsyncWebServer server(80);
 static App* g_app = nullptr;
-static const size_t MAX_BODY = 4096;
+static const size_t MAX_BODY = 8192;  // a full word list (100 words of 32 bytes) is about 3.6 KB
 
 static void sendJson(AsyncWebServerRequest* req, int code, const std::string& json) {
   AsyncWebServerResponse* res = req->beginResponse(code, "application/json", json.c_str());

@@ -39,6 +39,7 @@ Known upstream problems to handle:
 - **Unit count: 9** (configurable, decided 2026-10-16): 2 label units + 7 digit units.
 - **Power (corrected 2026-10-16 from upstream's build PDF):** the system runs on **12 V**. It uses **12 V 28BYJ-48 steppers** (5 V ones don't work), and each unit PCB has an L7805 for the Nano. Upstream measured 186 mA @12 V per flipping unit, so 9 units ≈ 1.8 A peak. Use a **12 V ≥ 3 A** supply and an optional 1000 µF/25 V cap.
 - **Flaps:** the default 45-flap set (blank, A–Z, `$ & #`, 0–9, `: . - ? !`). There are no accented flaps. Text input is folded instead: Portuguese and other Latin-1 accents become the base letter (`ã→A`, `ç→C`), and anything without a flap becomes blank.
+  *Changed 2026-10-26:* a Portuguese set instead: blank, A–Z, `Ã Ç É`, 0–9, `Á .`, TikTok logo, Instagram logo, Facebook logo. Flaps 1, 14, 15, 24, 25, 28–31 and 41–45 differ from upstream (`tools/make_flaps_pt.py`); 14/15 and 24/25 carry a narrower M and W, because upstream's run past the flap edge. Other accents still fold to the base letter.
 
 ### Display layout (9 units)
 ```
@@ -49,6 +50,7 @@ Known upstream problems to handle:
 - If the count doesn't fit: abbreviate using the `.` flap and `K`/`M`/`B` letters, e.g. `12.34M`, `987.6K`, with at most 2 decimals and never wider than the digit units. Must never show a wrong-looking number, so always round down.
 - `LABEL_WIDTH = 1` → `T`, `I`, `F` + 8 digits (or 8 units with 7 digits).
 - Error state for a platform: show label + `-------` (dashes) only if there has **never** been a good value; otherwise keep showing the last good value.
+  *Changed 2026-10-26:* the dash flap became the TikTok logo, so that state is label + blanks.
 
 ### Behaviour
 - Poll each enabled platform every `POLL_MINUTES` (default 15). Cache last good value + timestamp.
@@ -212,7 +214,7 @@ Tests (`pio test -e native`) must cover: 0, 9, 1234567 (width 7), 9999999, 10000
 |---|---|---|
 | Arduino Nano clone | 8 | $24 |
 | **12 V** 28BYJ-48 stepper (ULN2003A is on the PCB) | 8 | $12 |
-| KY003 hall sensor + 4 mm magnet | 8 | $4 |
+| KY003 hall sensor + 2×1 mm magnet | 8 | $4 |
 | 4-pos DIP switch | 8 | $2 |
 | Unit PCB (upstream Gerbers, JLCPCB 10 pcs) or perfboard | 8 | $5–10 + shipping |
 | ESP32 / ESP32-C3 SuperMini | 1 | $4 |

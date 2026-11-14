@@ -3,7 +3,8 @@
 #include <ArduinoJson.h>
 #include <stdio.h>
 
-static const char* const MODE_NAMES[] = {"cycle", "single", "text", "off"};
+static const char* const MODE_NAMES[DISPLAY_MODE_COUNT] = {"cycle", "single", "text", "off", "random", "clock", "date", "mix"};
+static const char* const MIX_NAMES[MIX_KIND_COUNT] = {"followers", "random", "text", "clock", "date"};
 static const char* const ALIGN_NAMES[] = {"left", "center", "right"};
 
 bool parsePlatform(const std::string& id, Platform& out) {
@@ -30,7 +31,28 @@ static bool parseHhmm(const char* s, uint16_t& out) {
   return true;
 }
 
-std::string configToJson(const Config& c, bool includeSecrets) {
+static void addList(JsonDocument& doc, const char* key, const std::vector<std::string>& list) {
+  JsonArray a = doc[key].to<JsonArray>();
+  for (const std::string& s : list) a.add(s);
+}
+
+std::string wordsToJson(const Config& c) {
+  JsonDocument doc;
+  addList(doc, "words", c.words);
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+std::string presetsToJson(const Config& c) {
+  JsonDocument doc;
+  addList(doc, "presets", c.presets);
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+std::string configToJson(const Config& c, bool includeSecrets, bool includeLists) {
   JsonDocument doc;
   for (uint8_t i = 0; i < PLATFORM_COUNT; i++) {
     JsonObject p = doc["platforms"][platformId((Platform)i)].to<JsonObject>();
@@ -42,6 +64,7 @@ std::string configToJson(const Config& c, bool includeSecrets) {
   doc["cycle_seconds"] = c.cycleSeconds;
   doc["units"] = c.frame.units;
   doc["label_width"] = c.frame.labelWidth;
+  doc["label_logos"] = c.frame.labelLogos;
   doc["speed"] = c.speedRpm;
   doc["mode"] = MODE_NAMES[(uint8_t)c.mode];
   doc["single"] = platformId(c.single);
@@ -52,8 +75,27 @@ std::string configToJson(const Config& c, bool includeSecrets) {
   doc["timezone"] = c.timezone;
   doc["celebrate"] = c.celebrate;
   doc["milestone_step"] = c.milestoneStep;
-  if (includeSecrets) doc["admin_key"] = c.adminKey;
-  else doc["admin_key_set"] = !c.adminKey.empty();
+  doc["random_seconds"] = c.randomSeconds;
+  JsonArray mix = doc["mix"].to<JsonArray>();
+  for (const MixItem& m : c.mix) {
+    JsonObject o = mix.add<JsonObject>();
+    o["kind"] = MIX_NAMES[(uint8_t)m.kind];
+    o["seconds"] = m.seconds;
+  }
+  doc["clock_24h"] = c.clock24h;
+  doc["date_lang"] = c.dateLang == DateLang::Pt ? "pt" : "en";
+  if (includeLists) {
+    addList(doc, "words", c.words);
+    addList(doc, "presets", c.presets);
+  }
+  doc["remote_url"] = c.remoteUrl;
+  if (includeSecrets) {
+    doc["remote_token"] = c.remoteToken;
+    doc["admin_key"] = c.adminKey;
+  } else {
+    doc["remote_token_set"] = !c.remoteToken.empty();
+    doc["admin_key_set"] = !c.adminKey.empty();
+  }
   std::string out;
   serializeJson(doc, out);
   return out;
@@ -67,6 +109,36 @@ static bool readInt(JsonVariantConst v, long min, long max, T& out, std::string&
     return false;
   }
   out = (T)v.as<long>();
+  return true;
+}
+
+// A JSON array of strings, each at most maxBytes long. Blank entries are dropped.
+static bool readList(JsonVariantConst v, size_t maxItems, size_t maxBytes, std::vector<std::string>& out,
+                     std::string& err, const char* name) {
+  if (v.isNull()) return true;
+  if (!v.is<JsonArrayConst>()) {
+    err = std::string(name) + " must be a list";
+    return false;
+  }
+  std::vector<std::string> list;
+  for (JsonVariantConst item : v.as<JsonArrayConst>()) {
+    if (!item.is<const char*>()) {
+      err = std::string(name) + " must contain only text";
+      return false;
+    }
+    std::string s = item.as<const char*>();
+    if (s.find_first_not_of(' ') == std::string::npos) continue;
+    if (s.size() > maxBytes) {
+      err = std::string(name) + ": an entry is longer than " + std::to_string(maxBytes) + " bytes";
+      return false;
+    }
+    list.push_back(s);
+  }
+  if (list.size() > maxItems) {
+    err = std::string(name) + " can hold at most " + std::to_string(maxItems) + " entries";
+    return false;
+  }
+  out = list;
   return true;
 }
 
@@ -116,13 +188,13 @@ std::string applyConfigJson(Config& live, const std::string& json) {
       m = m.substr(0, colon);
     }
     bool found = false;
-    for (uint8_t i = 0; i < 4; i++) {
+    for (uint8_t i = 0; i < DISPLAY_MODE_COUNT; i++) {
       if (m == MODE_NAMES[i]) {
         c.mode = (DisplayMode)i;
         found = true;
       }
     }
-    if (!found) return "mode must be cycle, single, text or off";
+    if (!found) return "mode must be cycle, single, text, off, random, clock, date or mix";
   }
   if (!doc["single"].isNull() && !parsePlatform(doc["single"] | "", c.single)) return "unknown platform in single";
   if (!doc["text"].isNull()) {
@@ -144,9 +216,58 @@ std::string applyConfigJson(Config& live, const std::string& json) {
     if (tz.empty() || tz.size() > 63) return "timezone must be a POSIX TZ string";
     c.timezone = tz;
   }
+  if (!doc["label_logos"].isNull()) {
+    if (!doc["label_logos"].is<bool>()) return "label_logos must be true/false";
+    c.frame.labelLogos = doc["label_logos"];
+  }
   if (!doc["celebrate"].isNull()) {
     if (!doc["celebrate"].is<bool>()) return "celebrate must be true/false";
     c.celebrate = doc["celebrate"];
+  }
+  if (!readInt(doc["random_seconds"], MIN_CYCLE_SECONDS, 3600, c.randomSeconds, err, "random_seconds")) return err;
+  if (!readList(doc["words"], MAX_WORDS, MAX_WORD_BYTES, c.words, err, "words")) return err;
+  if (!readList(doc["presets"], MAX_PRESETS, MAX_TEXT_BYTES, c.presets, err, "presets")) return err;
+  if (!doc["mix"].isNull()) {
+    if (!doc["mix"].is<JsonArrayConst>()) return "mix must be a list";
+    std::vector<MixItem> mix;
+    for (JsonVariantConst v : doc["mix"].as<JsonArrayConst>()) {
+      MixItem item;
+      std::string kind = v["kind"] | "";
+      bool found = false;
+      for (uint8_t i = 0; i < MIX_KIND_COUNT; i++) {
+        if (kind == MIX_NAMES[i]) {
+          item.kind = (MixKind)i;
+          found = true;
+        }
+      }
+      if (!found) return "mix kind must be followers, random, text, clock or date";
+      if (!readInt(v["seconds"], MIN_CYCLE_SECONDS, 3600, item.seconds, err, "mix seconds")) return err;
+      mix.push_back(item);
+    }
+    if (mix.size() > MAX_MIX) return "mix can hold at most " + std::to_string(MAX_MIX) + " entries";
+    c.mix = mix;
+  }
+  if (!doc["clock_24h"].isNull()) {
+    if (!doc["clock_24h"].is<bool>()) return "clock_24h must be true/false";
+    c.clock24h = doc["clock_24h"];
+  }
+  if (!doc["date_lang"].isNull()) {
+    std::string l = doc["date_lang"] | "";
+    if (l == "en") c.dateLang = DateLang::En;
+    else if (l == "pt") c.dateLang = DateLang::Pt;
+    else return "date_lang must be en or pt";
+  }
+  if (!doc["remote_url"].isNull()) {
+    std::string u = doc["remote_url"] | "";
+    while (!u.empty() && u.back() == '/') u.pop_back();
+    bool scheme = u.rfind("https://", 0) == 0 || u.rfind("http://", 0) == 0;
+    if (u.size() > 200 || (!u.empty() && !scheme)) return "remote_url must start with https:// or http://";
+    c.remoteUrl = u;
+  }
+  if (!doc["remote_token"].isNull()) {
+    std::string t = doc["remote_token"] | "";
+    if (t.size() > 128) return "remote_token is too long";
+    c.remoteToken = t;
   }
   if (!doc["admin_key"].isNull()) {
     std::string k = doc["admin_key"] | "";

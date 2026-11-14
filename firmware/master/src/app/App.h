@@ -11,6 +11,7 @@
 
 #include "display/FlapBus.h"
 #include "logic/config.h"
+#include "logic/rotation.h"
 #include "sources/Source.h"
 #include "store/TokenStore.h"
 
@@ -32,6 +33,11 @@ class App {
   bool checkAdminKey(const String& key);
   bool adminKeySet();
   void setAdminKey(const std::string& key);  // from the setup portal
+  // ---- for the relay client (net/Remote) ----
+  // The relay server's address and this device's token; false if no relay is configured.
+  bool remoteSettings(std::string& url, std::string& token);
+  // True once after every settings change, so the relay client knows to report the settings again.
+  bool takeConfigChanged();
   FlapBus& bus() { return bus_; }
 
  private:
@@ -51,6 +57,7 @@ class App {
   std::string desiredFrame(uint32_t now);
   static uint64_t epochNow();
   bool quietNow();
+  std::string clockFrame(bool date);
 
   std::mutex mu_;
   Config cfg_;
@@ -64,8 +71,8 @@ class App {
                                           {Platform::Facebook, cfg_.manualCount[2]}};
   PlatformState state_[PLATFORM_COUNT];
 
-  int current_ = -1;  // platform shown in cycle mode
-  uint32_t cycleStartMs_ = 0;
+  Rotation rotation_{[]() -> uint32_t { return esp_random(); }};  // which platform, word or mix entry is on show
+  bool configChanged_ = true;  // report the settings to the relay after boot
   std::string requested_;  // last frame handed to the bus
   bool rehomeRequested_ = false;
   bool unitsChanged_ = false;

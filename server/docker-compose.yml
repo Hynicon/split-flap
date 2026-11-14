@@ -1,0 +1,28 @@
+# Split-flap relay server behind nginx-proxy.
+# Copy .env.example to .env, fill it in, then from the repository root:
+#   docker compose -f server/docker-compose.yml up -d --build
+services:
+  splitflap:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in server/.env}
+      DEVICE_TOKEN: ${DEVICE_TOKEN:?set DEVICE_TOKEN in server/.env}
+      # Read by nginx-proxy (and by acme-companion, if you use it for certificates):
+      VIRTUAL_HOST: ${VIRTUAL_HOST:?set VIRTUAL_HOST in server/.env}
+      VIRTUAL_PORT: "8000"
+      LETSENCRYPT_HOST: ${LETSENCRYPT_HOST:-}
+    volumes:
+      - splitflap-data:/data
+    networks:
+      - proxy
+
+volumes:
+  splitflap-data:
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-nginx-proxy}

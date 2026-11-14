@@ -29,12 +29,43 @@ If the target index is lower than the current one, the drum turns all the way ro
 |---|---|
 | 0 | blank |
 | 1–26 | `A`–`Z` |
-| 27–29 | `$ & #` |
+| 27–29 | `Ã Ç É` |
 | 30–39 | `0`–`9` |
-| 40–44 | `: . - ? !` |
+| 40–44 | `Á .` TikTok Instagram Facebook |
 
-On the master, text is folded before display: lowercase becomes uppercase, Latin-1 accents become their base letter (`ã→A`, `ç→C`, `é→E`), and any other character becomes blank.
+Inside the master a frame is one byte per unit: ASCII, Latin-1 for `Ã Ç É Á` (0xC3 0xC7 0xC9 0xC1), and 0x01 / 0x02 / 0x03 for the Instagram, Facebook and TikTok logos (`FLAP_INSTAGRAM`, `FLAP_FACEBOOK`, `FLAP_TIKTOK`). `/api/status` sends it as UTF-8 with the logos as U+E000, U+E001 and U+E002.
+
+Text is folded before display: lowercase becomes uppercase, `Ã Ç É Á` keep their own flaps, other Latin-1 accents become their base letter (`õ→O`, `ê→E`), and any other character (control codes included) becomes blank.
 
 ## Timing
 - The unit enforces `OVERHEATINGTIMEOUT` (2 s) between moves.
 - A full revolution at 12 RPM takes about 5 s. The master waits until every unit reports idle before it sends the next frame, and gives up after a timeout.
+
+# Display ↔ relay server
+The optional relay (`server/`) lets the app reach a display that nothing can connect in to. The display makes every connection; the server never calls the display. Display side: `firmware/master/src/net/Remote.cpp`. Server side: `server/app.py`.
+
+## Request
+`POST {remote_url}/api/device/sync`, with `Authorization: Bearer <remote_token>` and a JSON body:
+
+| Field | Sent | Meaning |
+|---|---|---|
+| `results` | always | One `{"id": n}` per command received in the previous reply, with `"error": "..."` if the display refused it. This acknowledges them. |
+| `status` | always | The same document as `GET /api/status`. |
+| `config` | after boot, and whenever the settings changed | The same document as `GET /api/config` (no secrets). |
+
+## Reply
+`{"commands": [{"id": n, "type": "...", "body": {...}}, ...]}`. If no command is waiting, the server holds the request for up to 25 s and answers as soon as one arrives, so a change reaches the display in about a second.
+
+| `type` | `body` | The display runs |
+|---|---|---|
+| `config` | a partial settings document | the same as `POST /api/config` |
+| `show` | `{"text", "align"}` | the same as `POST /api/show` |
+| `tokens` | a token document | the same as `POST /api/tokens` |
+| `rehome` | `{}` | re-home all units |
+
+## Rules
+- Command ids only grow. A command stays in the reply until the display acknowledges it, so a lost reply is repeated; the display acknowledges an id it has already run without running it again.
+- The display validates every command exactly as it does for its own web page. The server does not validate settings: it shows the display's reported `config` with the waiting changes laid over it.
+- On any failure the display retries after 5 s, doubling up to 60 s, and keeps running on its stored settings.
+- The server refuses to queue `admin_key`, `remote_url` or `remote_token`: those can only be changed on the display itself.
+- `https://` URLs are verified against the embedded CA bundle. `http://` is accepted for a relay on the local network only; it sends the token in the clear.

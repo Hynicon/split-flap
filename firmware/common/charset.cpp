@@ -5,9 +5,10 @@ static const char LATIN1_UPPER[33] = "AAAAAAACEEEEIIIIDNOOOOO OUUUUY S";
 static const char LATIN1_LOWER[33] = "AAAAAAACEEEEIIIIDNOOOOO OUUUUY Y";
 
 static char foldCodePoint(uint32_t cp) {
-  if (cp < 0x80) {
-    char c = (char)cp;
-    return flapIndex(c) >= 0 ? (char)FLAP_GLYPHS[flapIndex(c)] : ' ';
+  if (cp < 0x20) return ' ';  // control codes, so text can't reach the logo flaps
+  if (cp < 0x80 || (cp >= 0xC0 && cp <= 0xFF)) {
+    int8_t i = flapIndex((char)cp);
+    if (i >= 0) return FLAP_GLYPHS[i];
   }
   if (cp >= 0xC0 && cp <= 0xDF) return LATIN1_UPPER[cp - 0xC0];
   if (cp >= 0xE0 && cp <= 0xFF) return LATIN1_LOWER[cp - 0xE0];

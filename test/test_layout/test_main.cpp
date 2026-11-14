@@ -43,11 +43,12 @@ void test_never_wider() {
     }
   }
 }
-void test_too_narrow_is_overflow() { eq("-", formatCount(12, 1)); }
+void test_too_narrow_is_overflow() { eq(" ", formatCount(12, 1)); }
 
 // ---- composeFrame ----
 void test_frame_label2() {
   FrameConfig c;  // 9 units, label width 2
+  c.labelLogos = false;
   eq("TT   1234", composeFrame(Platform::TikTok, 1234, c));
   eq("IG1234567", composeFrame(Platform::Instagram, 1234567, c));
   eq("FB 12.34M", composeFrame(Platform::Facebook, 12345678, c));
@@ -56,24 +57,38 @@ void test_frame_label1() {
   FrameConfig c;
   c.units = 8;
   c.labelWidth = 1;
+  c.labelLogos = false;
   eq("T   1234", composeFrame(Platform::TikTok, 1234, c));
   eq("I     42", composeFrame(Platform::Instagram, 42, c));
   eq("F      0", composeFrame(Platform::Facebook, 0, c));
 }
-void test_frame_missing_count_dashes() {
-  FrameConfig c;
-  eq("IG-------", composeFrame(Platform::Instagram, std::nullopt, c));
+void test_frame_logos() {
+  FrameConfig c;  // logos on by default
+  eq("\x03    1234", composeFrame(Platform::TikTok, 1234, c));
+  eq("\x01 1234567", composeFrame(Platform::Instagram, 1234567, c));
+  eq("\x02  12.34M", composeFrame(Platform::Facebook, 12345678, c));
   c.units = 8;
   c.labelWidth = 1;
-  eq("T-------", composeFrame(Platform::TikTok, std::nullopt, c));
+  eq("\x01     42", composeFrame(Platform::Instagram, 42, c));
+  eq("\x03   1234", composeFrame(Platform::TikTok, 1234, c));
+}
+void test_frame_missing_count_blank() {
+  FrameConfig c;
+  eq("\x01        ", composeFrame(Platform::Instagram, std::nullopt, c));
+  c.labelLogos = false;
+  eq("IG       ", composeFrame(Platform::Instagram, std::nullopt, c));
+  c.units = 8;
+  c.labelWidth = 1;
+  eq("T       ", composeFrame(Platform::TikTok, std::nullopt, c));
 }
 
 // ---- composeText (manual text mode) ----
 void test_text_align_and_fold() {
-  eq("OLA      ", composeText("olá", 9, Align::Left));
-  eq("      OLA", composeText("olá", 9, Align::Right));
-  eq("   OLA   ", composeText("olá", 9, Align::Center));
-  eq("CORACAO  ", composeText("coração", 9, Align::Left));
+  eq("OL\xC1      ", composeText("olá", 9, Align::Left));
+  eq("      OL\xC1", composeText("olá", 9, Align::Right));
+  eq("   OL\xC1   ", composeText("olá", 9, Align::Center));
+  eq("CORA\xC7\xC3O  ", composeText("coração", 9, Align::Left));
+  eq("VOCE     ", composeText("você", 9, Align::Left));
   eq("ABCDEFGHI", composeText("abcdefghijkl", 9, Align::Right));  // truncated
 }
 
@@ -83,22 +98,36 @@ void test_flap_index() {
   TEST_ASSERT_EQUAL_INT8(1, flapIndex('A'));
   TEST_ASSERT_EQUAL_INT8(1, flapIndex('a'));
   TEST_ASSERT_EQUAL_INT8(26, flapIndex('Z'));
-  TEST_ASSERT_EQUAL_INT8(27, flapIndex('$'));
-  TEST_ASSERT_EQUAL_INT8(29, flapIndex('#'));
+  TEST_ASSERT_EQUAL_INT8(27, flapIndex('\xC3'));  // Ã
+  TEST_ASSERT_EQUAL_INT8(27, flapIndex('\xE3'));  // ã
+  TEST_ASSERT_EQUAL_INT8(28, flapIndex('\xC7'));  // Ç
+  TEST_ASSERT_EQUAL_INT8(29, flapIndex('\xC9'));  // É
   TEST_ASSERT_EQUAL_INT8(30, flapIndex('0'));
   TEST_ASSERT_EQUAL_INT8(39, flapIndex('9'));
+  TEST_ASSERT_EQUAL_INT8(40, flapIndex('\xC1'));  // Á
   TEST_ASSERT_EQUAL_INT8(41, flapIndex('.'));
-  TEST_ASSERT_EQUAL_INT8(42, flapIndex('-'));
-  TEST_ASSERT_EQUAL_INT8(44, flapIndex('!'));
+  TEST_ASSERT_EQUAL_INT8(42, flapIndex(FLAP_TIKTOK));
+  TEST_ASSERT_EQUAL_INT8(43, flapIndex(FLAP_INSTAGRAM));
+  TEST_ASSERT_EQUAL_INT8(44, flapIndex(FLAP_FACEBOOK));
+  TEST_ASSERT_EQUAL_INT8(-1, flapIndex('-'));
+  TEST_ASSERT_EQUAL_INT8(-1, flapIndex('$'));
+  TEST_ASSERT_EQUAL_INT8(-1, flapIndex('!'));
   TEST_ASSERT_EQUAL_INT8(-1, flapIndex(','));
-  TEST_ASSERT_EQUAL_INT8(-1, flapIndex('\xC3'));
+  TEST_ASSERT_EQUAL_INT8(-1, flapIndex('\xD5'));  // Õ
+  TEST_ASSERT_EQUAL_INT8(-1, flapIndex('\0'));
 }
 void test_fold_portuguese() {
   char out[64];
   foldToFlaps("ÁÉÍÓÚ ÂÊÔ ÃÕ Ç À áéíóú âêô ãõ ç à", out, sizeof out);
-  TEST_ASSERT_EQUAL_STRING("AEIOU AEO AO C A AEIOU AEO AO C A", out);
+  TEST_ASSERT_EQUAL_STRING("\xC1\xC9IOU AEO \xC3O \xC7 A \xC1\xC9IOU AEO \xC3O \xC7 A", out);
   foldToFlaps("São João, 12€!", out, sizeof out);
-  TEST_ASSERT_EQUAL_STRING("SAO JOAO  12 !", out);  // ',' and '€' have no flap -> blank
+  TEST_ASSERT_EQUAL_STRING("S\xC3O JO\xC3O  12  ", out);  // ',' '€' '!' have no flap -> blank
+  foldToFlaps("a\x01" "b\x02" "c\x03", out, sizeof out);  // control codes can't reach the logo flaps
+  TEST_ASSERT_EQUAL_STRING("A B C ", out);
+}
+void test_frame_to_utf8() {
+  eq("\xEE\x80\x80 S\xC3\x83O \xC3\x87\xEE\x80\x81\xEE\x80\x82", frameToUtf8("\x01 S\xC3O \xC7\x02\x03"));
+  eq("FB 12.34M", frameToUtf8("FB 12.34M"));
 }
 void test_fold_bounds_and_invalid() {
   char out[4];
@@ -111,8 +140,38 @@ void test_fold_bounds_and_invalid() {
   TEST_ASSERT_EQUAL_STRING(" X", out2);
 }
 
+void test_clock() {
+  eq("  14 32  ", composeClock(14, 32, true, 9));
+  eq("  00 05  ", composeClock(0, 5, true, 9));
+  eq("14 32", composeClock(14, 32, true, 5));
+  eq("1432", composeClock(14, 32, true, 4));   // no room for the gap
+  eq("   ", composeClock(14, 32, true, 3));    // too narrow: blank
+  eq(" 2 32 PM ", composeClock(14, 32, false, 9));
+  eq("12 05 AM ", composeClock(0, 5, false, 9));    // midnight is 12 AM
+  eq("12 00 PM ", composeClock(12, 0, false, 9));   // noon is 12 PM
+  eq("11 59 PM", composeClock(23, 59, false, 8));
+  eq(" 2 32 ", composeClock(14, 32, false, 6));     // AM/PM dropped when it doesn't fit
+  eq("232", composeClock(14, 32, false, 3));
+  eq("         ", composeClock(24, 0, true, 9));    // invalid time
+  eq("         ", composeClock(10, 60, true, 9));
+}
+
+void test_date() {
+  eq(" 13 NOV  ", composeDate(13, 11, DateLang::En, 9));
+  eq("  1 FEB  ", composeDate(1, 2, DateLang::En, 9));
+  eq("  1 FEV  ", composeDate(1, 2, DateLang::Pt, 9));
+  eq(" 25 DEZ  ", composeDate(25, 12, DateLang::Pt, 9));
+  eq("13NOV", composeDate(13, 11, DateLang::En, 5));
+  eq("NOV ", composeDate(13, 11, DateLang::En, 4));
+  eq("  ", composeDate(13, 11, DateLang::En, 2));
+  eq("         ", composeDate(0, 11, DateLang::En, 9));
+  eq("         ", composeDate(13, 13, DateLang::En, 9));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_clock);
+  RUN_TEST(test_date);
   RUN_TEST(test_zero);
   RUN_TEST(test_nine);
   RUN_TEST(test_full_width);
@@ -138,10 +197,12 @@ int main(int, char**) {
   RUN_TEST(test_too_narrow_is_overflow);
   RUN_TEST(test_frame_label2);
   RUN_TEST(test_frame_label1);
-  RUN_TEST(test_frame_missing_count_dashes);
+  RUN_TEST(test_frame_logos);
+  RUN_TEST(test_frame_missing_count_blank);
   RUN_TEST(test_text_align_and_fold);
   RUN_TEST(test_flap_index);
   RUN_TEST(test_fold_portuguese);
   RUN_TEST(test_fold_bounds_and_invalid);
+  RUN_TEST(test_frame_to_utf8);
   return UNITY_END();
 }

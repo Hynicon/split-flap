@@ -46,6 +46,38 @@ HttpResponse httpsGet(const String& url, const String& bearer) { return request(
 
 HttpResponse httpsPostForm(const String& url, const String& formBody) { return request("POST", url, "", &formBody); }
 
+HttpResponse httpPostJson(const String& url, const String& bearer, const std::string& json, uint16_t timeoutSec) {
+  static const size_t MAX_REPLY = 16 * 1024;  // a queued word list is under 4 KB
+  HttpResponse r;
+  WiFiClientSecure tls;
+  WiFiClient plain;
+  const bool secure = url.startsWith("https://");
+  if (secure) tls.setCACertBundle(x509_crt_bundle_start);
+  WiFiClient& client = secure ? static_cast<WiFiClient&>(tls) : plain;
+  client.setTimeout(timeoutSec);  // seconds
+
+  HTTPClient http;
+  http.setTimeout((uint16_t)(timeoutSec * 1000));
+  http.setConnectTimeout(15000);
+  http.setReuse(false);
+  if (!http.begin(client, url)) {
+    r.code = -100;
+    return r;
+  }
+  http.addHeader("Authorization", "Bearer " + bearer);
+  http.addHeader("Content-Type", "application/json");
+  r.code = http.POST((uint8_t*)json.data(), json.size());
+  if (r.code > 0) {
+    int len = http.getSize();
+    if (len < 0 || (size_t)len <= MAX_REPLY) {
+      String body = http.getString();
+      r.body.assign(body.c_str(), body.length() > MAX_REPLY ? MAX_REPLY : body.length());
+    }
+  }
+  http.end();
+  return r;
+}
+
 String urlEncode(const String& s) {
   static const char HEX_DIGITS[] = "0123456789ABCDEF";
   String out;

@@ -28,7 +28,7 @@ def device_url(host: str) -> str:
 def admin_key() -> str:
     key = os.environ.get("SPLITFLAP_ADMIN_KEY", "")
     if not key:
-        key = getpass.getpass("Device admin key (set in the SplitFlap-Setup portal): ")
+        key = getpass.getpass("Device admin key (or, with --device <app server address>, the app's password): ")
     if not key:
         raise AuthError("an admin key is required to send tokens to the device")
     return key

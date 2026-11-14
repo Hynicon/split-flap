@@ -9,14 +9,24 @@ Upstream's measurements per unit at 12 V:
 - 13 mA idle;
 - 186 mA while flipping.
 
-For **9 units + ESP32**:
+For **10 units + ESP32** (9 units is about 10% less):
 - about 0.3 A idle;
-- **about 1.8 A with every unit flipping at once**.
+- **about 2.4 A peak with every unit flipping at once while Wi-Fi transmits** (10 × 186 mA plus up to ~0.5 A for the ESP32).
 
 Use a **12 V ≥ 3 A** supply. Optionally add a 1000 µF / 25 V electrolytic across 12 V/GND at the power input.
 
 ## Bus
-Units daisy-chain through the 4-pin JST-XH sockets (U7/U8, 70 mm cables). Each cable carries 12 V, GND, SDA and SCL. Check the silkscreen for the pin order.
+Units daisy-chain through the 4-pin JST-XH sockets: U7 of each unit goes to U8 of the next, and power comes in at unit 0's U8. Each cable carries 12 V, GND, SDA and SCL, pin 1 to pin 1. These pin orders come from the v1.2 Gerbers and silkscreen:
+
+| Socket | Pins, in order |
+|---|---|
+| U7 | left to right: SCL, SDA, GND, 12V |
+| U8 | left to right: 12V, GND, SDA, SCL |
+| U6 (hall sensor) | from the U10 end: 5V, GND, signal (Nano D7) |
+
+U6's middle pin is GND, but a KY-003's middle pin is normally +. Wire the hall cable by function, using the labels on the sensor: 5V to +, GND to −, signal to S.
+
+The DIP switches connect switch 1 to Nano D6 and switch 4 to D3. The L7805's legs are IN, GND, OUT from left to right, with its metal tab toward the Nano.
 
 ```
  12V PSU ──► Unit 0 ──XH-4──► Unit 1 ──XH-4──► … ──► Unit 8
@@ -45,11 +55,23 @@ ESP-01S pinout (component side, antenna pointing away from you): `GND, GPIO2, GP
 - **While flashing over USB, disconnect the 3V3 jumper** (keep GND, SDA, SCL). Otherwise the DevKit's regulator and the AMS1117 back-feed each other.
 - Leave CH_PD/EN, RST, GPIO0 and GPIO2 unconnected. They were for the ESP-01.
 
-## Option B: no upstream PCB for the first unit
+## Option B: no first-board parts (used for this build)
+This build's boards are hand-soldered from bare PCBs and leave off the first-board-only parts: the AMS1117, the BSS138s, the 10 kΩ resistors and the 22 µF capacitor. Without them, no board has a level shifter, so the ESP32 connects through a ready-made module instead:
+- one 4-channel BSS138 "I2C level shifter" board;
+- one mini 12 V → 5 V buck converter (MP1584 or Mini-360), set to 5.0 V **before** you connect anything to it.
+
+Use all 4 wires of unit 0's spare XH-4 plug. That plug normally carries power only.
+- **12 V and GND** go to the DC jack and switch, and also to the buck converter input.
+- **SDA and SCL** go to the level shifter's HV1 and HV2.
+- The buck converter's 5 V output feeds the ESP32's **5V/VIN** pin and the level shifter's **HV** pin.
+
+Check the plug's pin order against the board's silkscreen.
+
+## Level shifter wiring (Option B, or no upstream PCB at all)
 Use a BSS138 module (for example the 4-channel "I2C level shifter" boards):
 
 ```
-ESP32 3V3  ── LV        HV ── 5 V (from a unit's 7805 / Nano 5V pin)
+ESP32 3V3  ── LV        HV ── 5 V (Option B: the buck converter; otherwise a unit's 7805 / Nano 5V pin)
 ESP32 GND  ── GND      GND ── bus GND
 ESP32 G21  ── LV1      HV1 ── bus SDA (Nano A4)
 ESP32 G22  ── LV2      HV2 ── bus SCL (Nano A5)
@@ -71,6 +93,7 @@ Each unit reads its 4-position DIP switch at power-up. Switch 1 is the most sign
 | 6 | off ON ON off | 0x16 | digit |
 | 7 | off ON ON ON | 0x17 | digit |
 | 8 | ON off off off | 0x18 | digit |
+| 9 | ON off off ON | 0x19 | digit (10-unit build) |
 
 > This firmware's addresses differ from upstream's, which started at 0x00 (the I2C general-call address). Units must run **this** repo's unit firmware.
 
@@ -82,7 +105,7 @@ Each unit reads its 4-position DIP switch at power-up. Switch 1 is the most sign
    - Power up with the magnet parked right at the sensor. Does the drum back out and do a full turn, or stop immediately?
    - Power up away from the magnet. Does it travel ~50 steps first, then search?
    - Note what you see. Change the code only if homing is actually wrong.
-5. Optional: uncomment `#define test` in the unit firmware. The unit should show `" ", Z, A, U, N, ?, 0, 1, 2, 9` in that order.
+5. Optional: uncomment `#define test` in the unit firmware. The unit should show blank, Z, A, U, N, the Instagram logo, 0, 1, 2, 9 in that order.
 6. Wire the ESP32 (Option A or B). Flash the master: `pio run -e master -t upload && pio run -e master -t uploadfs`. Then:
    - The serial monitor (115200) should print `scan: 1/9 units answered: 0x10=ok …`.
    - Type text in the serial monitor and it should appear on the flaps.

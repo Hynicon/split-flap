@@ -15,3 +15,9 @@ upstream/
 # Printables STLs (license: check before redistributing)
 hardware/stl/*
 !hardware/stl/README.md
+# Build guide 3D models and photos are made from upstream files (tools/make_guide_models.py, make_guide_images.py)
+hardware/guide/models/
+hardware/guide/img/
+
+# Portainer upload bundle (python server/make_bundle.py)
+server/dist/

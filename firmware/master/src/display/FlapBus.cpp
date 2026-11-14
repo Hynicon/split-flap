@@ -3,6 +3,7 @@
 #include <Wire.h>
 
 #include "charset.h"
+#include "display/layout.h"
 
 static uint8_t addressOf(uint8_t unit) { return UNIT_I2C_BASE + unit; }
 
