@@ -19,6 +19,7 @@ only reachable through a reverse proxy (the Docker image sets it).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import copy
 import hashlib
 import hmac
@@ -185,15 +186,28 @@ def is_https(request: Request) -> bool:
     return request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
 
 
-# Wrong passwords, from the sign-in form and from the X-Admin-Key header alike, lock out the
-# address they came from. There is deliberately no lockout across all addresses: anyone could then
-# keep the owner from signing in. Guesses spread over many addresses are slowed by the per-address
-# limit and the 1 s delay on each wrong password, and a long APP_PASSWORD makes them hopeless.
+# Wrong passwords, from the sign-in form and from the X-Admin-Key header alike, are counted per
+# network rather than per address (an IPv4 /24 or an IPv6 /64), so changing address within one
+# network doesn't buy more guesses. Five in five minutes lock that network out. Every wrong password
+# also waits 1 s before the answer.
+#
+# Across all networks there is no hard lockout, because anyone could then keep the owner from
+# signing in. Instead, once more than WARN_FAILS_TOTAL wrong passwords arrive within the window, a
+# network that has guessed wrong even once is locked out: each new network an attacker brings gets
+# a single guess, while a network with no wrong passwords (the owner's) can still sign in.
 # A valid session cookie is checked first, so someone already signed in is never locked out.
-FAILS: dict[str, list[float]] = {}  # address -> times of recent wrong passwords
-ALL = "*"  # every wrong password, for the warning in the log only
+FAILS: dict[str, list[float]] = {}  # network -> times of recent wrong passwords
+ALL = "*"  # every wrong password
 MAX_FAILS, WARN_FAILS_TOTAL, FAIL_WINDOW = 5, 30, 300
 _warned_at = 0.0
+
+
+def fail_key(ip: str) -> str:
+    try:
+        net = ipaddress.ip_network(f"{ip}/{24 if ':' not in ip else 64}", strict=False)
+        return str(net)
+    except ValueError:
+        return ip
 
 
 def recent_fails(key: str) -> int:
@@ -205,26 +219,30 @@ def recent_fails(key: str) -> int:
     return len(recent)
 
 
+def under_attack() -> bool:
+    return recent_fails(ALL) >= WARN_FAILS_TOTAL
+
+
 def locked_out(ip: str) -> bool:
-    return recent_fails(ip) >= MAX_FAILS
+    n = recent_fails(fail_key(ip))
+    return n >= MAX_FAILS or (n > 0 and under_attack())
 
 
 def wrong_password(ip: str) -> None:
     global _warned_at
     now = time.time()
-    FAILS.setdefault(ip, []).append(now)
+    FAILS.setdefault(fail_key(ip), []).append(now)
     FAILS.setdefault(ALL, []).append(now)
-    if len(FAILS) > 10000:  # many addresses: forget the oldest rather than grow without end
-        for key in list(FAILS)[:5000]:
-            if key != ALL:
-                FAILS.pop(key, None)
-    if recent_fails(ALL) >= WARN_FAILS_TOTAL and now - _warned_at > FAIL_WINDOW:
+    if len(FAILS) > 10000:  # forget only networks whose wrong passwords have all expired
+        for key in list(FAILS):
+            recent_fails(key)
+    if under_attack() and now - _warned_at > FAIL_WINDOW:
         _warned_at = now
         print(f"WARNING: {recent_fails(ALL)} wrong passwords in the last {FAIL_WINDOW // 60} minutes "
-              f"from {len(FAILS) - 1} addresses", flush=True)
+              f"from {len(FAILS) - 1} networks", flush=True)
 
 
-def logged_in(request: Request) -> bool:
+async def logged_in(request: Request) -> bool:
     if valid_session(request.cookies.get("session")):
         return True
     # Scripts (tools/auth) send the password in the header the display's own API uses.
@@ -237,6 +255,7 @@ def logged_in(request: Request) -> bool:
     if same(key, APP_PASSWORD):
         return True
     wrong_password(ip)
+    await asyncio.sleep(1)
     return False
 
 
@@ -256,7 +275,7 @@ PUBLIC_PATHS = {"/login", "/style.css", "/healthz", "/api/device/sync"}
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
-    if path in PUBLIC_PATHS or logged_in(request):
+    if path in PUBLIC_PATHS or await logged_in(request):
         return await call_next(request)
     if path.startswith("/api/"):
         return JSONResponse({"error": "not signed in"}, status_code=401)
@@ -265,7 +284,7 @@ async def require_login(request: Request, call_next):
 
 @app.get("/login")
 async def login_page(request: Request):
-    if logged_in(request):
+    if await logged_in(request):
         return RedirectResponse("/", status_code=303)
     return HTMLResponse(LOGIN_PAGE.replace("__ERROR__", ""), headers={"Cache-Control": "no-store"})
 
@@ -274,7 +293,7 @@ async def login_page(request: Request):
 async def login(request: Request):
     ip = client_ip(request)
     if locked_out(ip):
-        page = LOGIN_PAGE.replace("__ERROR__", "Too many wrong passwords. Wait five minutes and try again.")
+        page = LOGIN_PAGE.replace("__ERROR__", "Too many wrong passwords from your network. Wait five minutes and try again.")
         return HTMLResponse(page, status_code=429)
     raw = (await request.body())[:4096].decode("utf-8", "replace")
     password = urllib.parse.parse_qs(raw, keep_blank_values=True).get("password", [""])[0]

@@ -195,7 +195,7 @@ phone ──HTTPS──► nginx-proxy ──► split-flap server (Docker)
 
 **Set up the server** (Docker, behind [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy)):
 1. Copy `server/.env.example` to `server/.env` and fill it in:
-   - `APP_PASSWORD`: the password for the app's sign-in page. It faces the internet, so make it long: 16 or more random characters. Five wrong passwords lock out only the address they came from, so that nobody can lock you out by guessing, and the length is what stops guessing from many addresses.
+   - `APP_PASSWORD`: the password for the app's sign-in page. It faces the internet, so make it long: 16 or more random characters. Five wrong passwords lock out the network they came from for five minutes. When many networks guess at once, each one that guesses wrong is locked out after its first try, but a network that hasn't guessed (yours) can still sign in.
    - `DEVICE_TOKEN`: a random secret for the display, for example from `openssl rand -hex 24`.
    - `VIRTUAL_HOST`: the hostname nginx-proxy should route, e.g. `flap.example.com`. Set `LETSENCRYPT_HOST` too if you use acme-companion.
    - `PROXY_NETWORK`: the Docker network your nginx-proxy is on.
