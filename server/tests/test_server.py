@@ -163,11 +163,16 @@ def test_guesses_from_many_addresses_do_not_lock_out_the_owner(tmp_path):
         # each guessing network is locked out, also from its other addresses
         assert login("10.0.3.1") == 429
         assert login("10.0.3.77") == 429
-        # under attack, a new network gets one wrong guess, then is locked out too
+        # under attack, a new network gets two wrong guesses, then is locked out too
+        assert login("10.7.7.7", "nope") == 401
         assert login("10.7.7.7", "nope") == 401
         assert login("10.7.7.7") == 429
         # someone on a network that hasn't guessed can still sign in
         assert login("10.9.9.9") == 303
+        # and a network that signed in recently isn't caught by the attack rule
+        assert login("10.9.9.10", "typo") == 401
+        assert login("10.9.9.10", "typo") == 401
+        assert login("10.9.9.10") == 303
     finally:
         s.stop()
 

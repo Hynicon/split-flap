@@ -19,6 +19,7 @@ only reachable through a reverse proxy (the Docker image sets it).
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict, deque
 import ipaddress
 import copy
 import hashlib
@@ -192,20 +193,25 @@ def is_https(request: Request) -> bool:
 # also waits 1 s before the answer.
 #
 # Across all networks there is no hard lockout, because anyone could then keep the owner from
-# signing in. Instead, once more than WARN_FAILS_TOTAL wrong passwords arrive within the window, a
-# network that has guessed wrong even once is locked out: each new network an attacker brings gets
-# a single guess, while a network with no wrong passwords (the owner's) can still sign in.
-# A valid session cookie is checked first, so someone already signed in is never locked out.
-FAILS: dict[str, list[float]] = {}  # network -> times of recent wrong passwords
-ALL = "*"  # every wrong password
-MAX_FAILS, WARN_FAILS_TOTAL, FAIL_WINDOW = 5, 30, 300
-_warned_at = 0.0
+# signing in. Instead, once more than ATTACK_FAILS wrong passwords arrive within the window, a
+# network with two wrong passwords is locked out, so each new network an attacker brings gets two
+# guesses instead of five.
+#
+# Phone carriers put many customers behind shared addresses, so the owner may share a network with
+# a guesser. Networks that signed in successfully in the last 30 days are therefore exempt from the
+# attack rule, and a valid session cookie is checked before any of this, so someone already signed
+# in is never locked out.
+FAILS: OrderedDict[str, list[float]] = OrderedDict()  # network -> times of recent wrong passwords, oldest first
+ALL_FAILS: deque[float] = deque()  # times of every recent wrong password
+TRUSTED: OrderedDict[str, float] = OrderedDict()  # network -> time of its last good sign-in
+MAX_FAILS, ATTACK_FAILS, ATTACK_LOCK, FAIL_WINDOW = 5, 30, 2, 300
+MAX_NETWORKS, TRUST_SECONDS = 20000, 30 * 86400
+_warned_at = _pruned_at = 0.0
 
 
 def fail_key(ip: str) -> str:
     try:
-        net = ipaddress.ip_network(f"{ip}/{24 if ':' not in ip else 64}", strict=False)
-        return str(net)
+        return str(ipaddress.ip_network(f"{ip}/{24 if ':' not in ip else 64}", strict=False))
     except ValueError:
         return ip
 
@@ -220,26 +226,46 @@ def recent_fails(key: str) -> int:
 
 
 def under_attack() -> bool:
-    return recent_fails(ALL) >= WARN_FAILS_TOTAL
+    while ALL_FAILS and time.time() - ALL_FAILS[0] >= FAIL_WINDOW:
+        ALL_FAILS.popleft()
+    return len(ALL_FAILS) >= ATTACK_FAILS
+
+
+def trusted(key: str) -> bool:
+    t = TRUSTED.get(key)
+    return t is not None and time.time() - t < TRUST_SECONDS
 
 
 def locked_out(ip: str) -> bool:
-    n = recent_fails(fail_key(ip))
-    return n >= MAX_FAILS or (n > 0 and under_attack())
+    key = fail_key(ip)
+    n = recent_fails(key)
+    return n >= MAX_FAILS or (n >= ATTACK_LOCK and under_attack() and not trusted(key))
+
+
+def good_password(ip: str) -> None:
+    key = fail_key(ip)
+    TRUSTED.pop(key, None)
+    TRUSTED[key] = time.time()
+    while len(TRUSTED) > 1000:
+        TRUSTED.popitem(last=False)
 
 
 def wrong_password(ip: str) -> None:
-    global _warned_at
+    global _warned_at, _pruned_at
     now = time.time()
-    FAILS.setdefault(fail_key(ip), []).append(now)
-    FAILS.setdefault(ALL, []).append(now)
-    if len(FAILS) > 10000:  # forget only networks whose wrong passwords have all expired
-        for key in list(FAILS):
-            recent_fails(key)
+    key = fail_key(ip)
+    FAILS[key] = FAILS.pop(key, []) + [now]  # moves the network to the newest end
+    ALL_FAILS.append(now)
+    if len(FAILS) > MAX_NETWORKS and now - _pruned_at > 10:  # prune at most every 10 s
+        _pruned_at = now
+        for k in list(FAILS):
+            recent_fails(k)
+    while len(FAILS) > MAX_NETWORKS:  # still full of live entries: forget the least recent network
+        FAILS.popitem(last=False)
     if under_attack() and now - _warned_at > FAIL_WINDOW:
         _warned_at = now
-        print(f"WARNING: {recent_fails(ALL)} wrong passwords in the last {FAIL_WINDOW // 60} minutes "
-              f"from {len(FAILS) - 1} networks", flush=True)
+        print(f"WARNING: {len(ALL_FAILS)} wrong passwords in the last {FAIL_WINDOW // 60} minutes "
+              f"from {len(FAILS)} networks", flush=True)
 
 
 async def logged_in(request: Request) -> bool:
@@ -253,6 +279,7 @@ async def logged_in(request: Request) -> bool:
     if locked_out(ip):
         return False
     if same(key, APP_PASSWORD):
+        good_password(ip)
         return True
     wrong_password(ip)
     await asyncio.sleep(1)
@@ -301,6 +328,7 @@ async def login(request: Request):
         wrong_password(ip)
         await asyncio.sleep(1)
         return HTMLResponse(LOGIN_PAGE.replace("__ERROR__", "Wrong password."), status_code=401)
+    good_password(ip)
     res = RedirectResponse("/", status_code=303)
     res.set_cookie("session", sign(int(time.time()) + SESSION_DAYS * 86400), max_age=SESSION_DAYS * 86400,
                    httponly=True, secure=is_https(request), samesite="lax")
