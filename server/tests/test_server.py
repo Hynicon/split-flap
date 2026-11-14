@@ -177,7 +177,7 @@ def test_guesses_from_many_addresses_do_not_lock_out_the_owner(tmp_path):
         s.stop()
 
 
-def test_full_failure_table_refuses_new_networks_instead_of_forgetting(tmp_path):
+def test_full_failure_table_keeps_lockouts_and_lets_newcomers_in(tmp_path):
     s = Server(tmp_path, TRUST_PROXY="1", MAX_NETWORKS="3")
     s.start()
     try:
@@ -186,11 +186,16 @@ def test_full_failure_table_refuses_new_networks_instead_of_forgetting(tmp_path)
         assert login("10.50.0.1") == 303  # this network is now trusted
         for i in range(3):
             assert login(f"10.0.{i}.1", "nope") == 401  # fills the table
-        assert login("10.0.9.1") == 429  # new network, table full: refused
         for _ in range(4):
             login("10.0.0.1", "nope")
-        assert login("10.0.0.1") == 429  # its lockout was kept
-        assert login("10.50.0.1") == 303  # a trusted network still gets in
+        assert login("10.0.0.1") == 429  # a live lockout is kept
+        assert login("10.0.9.1") == 303  # a newcomer can still sign in
+        assert login("10.0.8.1", "nope") == 401  # newcomers get the stricter limit
+        assert login("10.0.8.1", "nope") == 401
+        assert login("10.0.8.1") == 429
+        for _ in range(5):
+            login("10.50.0.2", "nope")  # guesses from a trusted network still count
+        assert login("10.50.0.2") == 429
     finally:
         s.stop()
 

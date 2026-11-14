@@ -197,8 +197,10 @@ def is_https(request: Request) -> bool:
 # network with two wrong passwords is locked out, so each new network an attacker brings gets two
 # guesses instead of five.
 #
-# At most MAX_NETWORKS guessing networks are tracked. When that many are live, networks not yet in
-# the table (and not trusted) are refused until entries expire, rather than forgetting a lockout.
+# At most MAX_NETWORKS guessing networks are tracked one by one, and live entries are never
+# dropped. When the table is full, further networks share OVERFLOW_BUCKETS hashed counters and are
+# held to the stricter ATTACK_LOCK limit; two networks rarely share a counter, so a newcomer such as
+# the owner can still sign in. Trusted networks are always tracked one by one.
 #
 # Phone carriers put many customers behind shared addresses, so the owner may share a network with
 # a guesser. Networks that signed in successfully in the last 30 days are therefore exempt from the
@@ -239,15 +241,36 @@ def trusted(key: str) -> bool:
     return t is not None and time.time() - t < TRUST_SECONDS
 
 
+OVERFLOW_BUCKETS = 65536
+OVERFLOW: dict[int, list[float]] = {}  # bucket -> times of recent wrong passwords
+
+
 def table_full() -> bool:
     return len(FAILS) >= MAX_NETWORKS
 
 
+def overflow_bucket(key: str) -> int | None:
+    """The shared counter for a network that doesn't fit in FAILS, or None if it is tracked there."""
+    if key in FAILS or not table_full() or trusted(key):
+        return None
+    return hash(key) % OVERFLOW_BUCKETS  # str hashes are randomised per process, so collisions can't be aimed
+
+
+def overflow_fails(bucket: int) -> int:
+    recent = [t for t in OVERFLOW.get(bucket, []) if time.time() - t < FAIL_WINDOW]
+    if recent:
+        OVERFLOW[bucket] = recent
+    else:
+        OVERFLOW.pop(bucket, None)
+    return len(recent)
+
+
 def locked_out(ip: str) -> bool:
     key = fail_key(ip)
+    bucket = overflow_bucket(key)
+    if bucket is not None:
+        return overflow_fails(bucket) >= ATTACK_LOCK
     n = recent_fails(key)
-    if n == 0 and table_full() and not trusted(key):
-        return True  # too many guessing networks to track: new ones wait until entries expire
     return n >= MAX_FAILS or (n >= ATTACK_LOCK and under_attack() and not trusted(key))
 
 
@@ -268,10 +291,13 @@ def wrong_password(ip: str) -> None:
         _pruned_at = now
         for k in list(FAILS):
             recent_fails(k)
-    # Live entries are never dropped: when the table is full, a network not in it is not added
-    # (and locked_out refuses it), so memory stays bounded without forgetting anyone's lockout.
-    if key in FAILS or not table_full():
+        for b in list(OVERFLOW):
+            overflow_fails(b)
+    bucket = overflow_bucket(key)
+    if bucket is None:
         FAILS[key] = FAILS.pop(key, []) + [now]
+    else:
+        OVERFLOW.setdefault(bucket, []).append(now)
     if under_attack() and now - _warned_at > FAIL_WINDOW:
         _warned_at = now
         print(f"WARNING: {len(ALL_FAILS)} wrong passwords in the last {FAIL_WINDOW // 60} minutes "
@@ -334,6 +360,9 @@ async def login(request: Request):
         return HTMLResponse(page, status_code=429)
     raw = (await request.body())[:4096].decode("utf-8", "replace")
     password = urllib.parse.parse_qs(raw, keep_blank_values=True).get("password", [""])[0]
+    if locked_out(ip):  # again: other guesses may have landed while the body was read
+        page = LOGIN_PAGE.replace("__ERROR__", "Too many wrong passwords from your network. Wait five minutes and try again.")
+        return HTMLResponse(page, status_code=429)
     if not same(password, APP_PASSWORD):
         wrong_password(ip)
         await asyncio.sleep(1)
