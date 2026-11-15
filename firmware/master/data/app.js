@@ -129,17 +129,18 @@ const LOGOS = {
   "": ["TikTok", '<path fill="currentColor" d="M12.6 2h3.2c.3 2.4 1.9 4.1 4.4 4.4v3.3c-1.6 0-3.1-.5-4.4-1.4v6.6a6.1 6.1 0 1 1-6.1-6.1c.3 0 .6 0 .9.1v3.4a2.8 2.8 0 1 0 2 2.6z"/>'],
 };
 let lastFrame = null;
+function drawFlap(s, ch) {
+  if (LOGOS[ch]) s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${LOGOS[ch][1]}</svg>`;
+  else s.textContent = ch;
+}
 function renderFrame(frame) {
   const chars = [...(frame ?? " ".repeat(units()))];
   const key = chars.join("");
   if (key === lastFrame) return;
   lastFrame = key;
-  $("#frame").replaceChildren(...chars.map((ch) => {
-    const s = el("span");
-    if (LOGOS[ch]) s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${LOGOS[ch][1]}</svg>`;
-    else s.textContent = ch;
-    return s;
-  }));
+  // The demo (demo.js, not part of the display's files) flips each flap through the drum instead.
+  if (window.splitflapDemo) window.splitflapDemo.flipTo(chars, drawFlap);
+  else $("#frame").replaceChildren(...chars.map((ch) => { const s = el("span"); drawFlap(s, ch); return s; }));
   const text = chars.map((ch) => (LOGOS[ch] ? ` ${LOGOS[ch][0]} ` : ch)).join("").replace(/\s+/g, " ").trim();
   $("#frame").setAttribute("aria-label", `Current display: ${text || "blank"}`);
 }

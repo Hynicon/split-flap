@@ -25,3 +25,6 @@ hardware/guide/img/
 
 # Portainer upload bundle (python server/make_bundle.py)
 server/dist/
+
+# App demo (python tools/make_demo.py), published with the guide
+hardware/guide/demo/

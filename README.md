@@ -20,6 +20,8 @@ It is based on David Königsmann's open-source [split-flap display](https://gith
 
 **Building one?** Follow the step-by-step [build guide](https://hynicon.github.io/split-flap-guide/), with 3D assembly diagrams, wiring drawings and a checklist.
 
+**Just curious?** [Try the app demo](https://hynicon.github.io/split-flap-guide/demo/): the phone app with a virtual display that flips flap by flap, all in your browser. `python tools/make_demo.py` builds it from `firmware/master/data` and `tools/demo/demo.js`.
+
 Licensed **GPL-3.0**, same as upstream (see `LICENSE`).
 
 ---
