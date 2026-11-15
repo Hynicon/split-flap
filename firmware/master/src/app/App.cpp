@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "logic/policy.h"
+#include "sources/Https.h"
 #include "store/ConfigStore.h"
 
 using Lock = std::lock_guard<std::mutex>;
@@ -54,11 +55,11 @@ void App::loop() {
       tzApplied_ = cfg_.timezone;
     }
   }
-  pollSources();
+  if (!pollSources()) pollWeather();  // at most one network call per loop
   updateDisplay();
 }
 
-void App::pollSources() {
+bool App::pollSources() {
   uint32_t now = millis();
   for (uint8_t i = 0; i < PLATFORM_COUNT; i++) {
     Platform p = (Platform)i;
@@ -115,7 +116,63 @@ void App::pollSources() {
       if (s.failures < 255) s.failures++;
       s.nextFetchMs = millis() + backoffMinutes(s.failures, cfg_.pollMinutes, r.retryAfterSec) * 60000UL;
     }
-    return;
+    return true;
+  }
+  return false;
+}
+
+// Only while the weather is on show (its mode, or an entry in the mix) and a location is set.
+bool App::weatherWanted() const {
+  if (!cfg_.weatherSet) return false;
+  if (cfg_.mode == DisplayMode::Weather) return true;
+  if (cfg_.mode != DisplayMode::Mix) return false;
+  for (const MixItem& m : cfg_.mix) {
+    if (m.kind == MixKind::Weather) return true;
+  }
+  return false;
+}
+
+void App::pollWeather() {
+  static const uint16_t WEATHER_MINUTES = 15;
+  char url[200];
+  {
+    Lock lock(mu_);
+    if (!weatherWanted() || WiFi.status() != WL_CONNECTED) return;
+    WeatherState& w = weather_;
+    // A new place or unit makes the reading on hand stale: fetch now.
+    bool moved = w.lat != cfg_.weatherLat || w.lon != cfg_.weatherLon || w.fahrenheit != cfg_.weatherFahrenheit;
+    if (moved) {
+      w.have = false;
+      w.failures = 0;
+      w.lat = cfg_.weatherLat;
+      w.lon = cfg_.weatherLon;
+      w.fahrenheit = cfg_.weatherFahrenheit;
+      w.nextFetchMs = millis();
+    }
+    if ((int32_t)(millis() - w.nextFetchMs) < 0) return;
+    snprintf(url, sizeof url,
+             "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+             "&current=temperature_2m,weather_code&temperature_unit=%s",
+             w.lat, w.lon, w.fahrenheit ? "fahrenheit" : "celsius");
+  }
+  HttpResponse http = httpsGet(url);  // no lock held during the network call
+  WeatherResult r = parseOpenMeteo(http.code, http.body);
+  Serial.printf("[weather] %s %ld %d %s\n", fetchStatusName(r.status), (long)r.tempTenths, r.code, r.error.c_str());
+
+  Lock lock(mu_);
+  WeatherState& w = weather_;
+  if (r.status == FetchStatus::Ok) {
+    w.have = true;
+    w.tempTenths = r.tempTenths;
+    w.code = r.code;
+    w.lastOkEpoch = epochNow();
+    w.error = "";
+    w.failures = 0;
+    w.nextFetchMs = millis() + WEATHER_MINUTES * 60000UL;
+  } else {
+    w.error = r.error.c_str();
+    if (w.failures < 255) w.failures++;
+    w.nextFetchMs = millis() + backoffMinutes(w.failures, WEATHER_MINUTES, http.retryAfterSec) * 60000UL;
   }
 }
 
@@ -146,6 +203,8 @@ std::string App::desiredFrame(uint32_t now) {
     case SceneKind::Text: return composeText(cfg_.text, units, cfg_.textAlign);
     case SceneKind::Clock: return clockFrame(false);
     case SceneKind::Date: return clockFrame(true);
+    case SceneKind::Weather: return weatherFrame();
+    case SceneKind::Countdown: return countdownFrame();
   }
   return blank;
 }
@@ -159,6 +218,30 @@ std::string App::clockFrame(bool date) {
   localtime_r(&t, &local);
   if (date) return composeDate((uint8_t)local.tm_mday, (uint8_t)(local.tm_mon + 1), cfg_.dateLang, units);
   return composeClock((uint8_t)local.tm_hour, (uint8_t)local.tm_min, cfg_.clock24h, units);
+}
+
+// The latest weather reading; blank until there is one.
+std::string App::weatherFrame() {
+  const uint8_t units = cfg_.frame.units;
+  if (!weather_.have) return std::string(units, ' ');
+  return composeWeather(weather_.tempTenths, weather_.code, weather_.fahrenheit, cfg_.dateLang, units);
+}
+
+// Time left to countdown_at; blank until the clock has synced. Once a one-off countdown is over it
+// shows countdown_done (or the label).
+std::string App::countdownFrame() {
+  const uint8_t units = cfg_.frame.units;
+  CountdownTarget target;
+  if (!epochNow() || !parseCountdownAt(cfg_.countdownAt, target)) return std::string(units, ' ');
+  time_t t = time(nullptr);
+  struct tm l;
+  localtime_r(&t, &l);
+  int64_t left = secondsUntil(target, (uint16_t)(l.tm_year + 1900), (uint8_t)(l.tm_mon + 1), (uint8_t)l.tm_mday,
+                              (uint8_t)l.tm_hour, (uint8_t)l.tm_min, (uint8_t)l.tm_sec);
+  if (left <= 0) {
+    return composeText(cfg_.countdownDone.empty() ? cfg_.countdownLabel : cfg_.countdownDone, units, Align::Center);
+  }
+  return composeCountdown(cfg_.countdownLabel, left, units);
 }
 
 void App::updateDisplay() {
@@ -240,6 +323,17 @@ std::string App::statusJson() {
     if (t.pageId.length()) tok["page_id"] = t.pageId;
     tok["needs_reauth"] = s.status == FetchStatus::AuthExpired;
   }
+  JsonObject w = doc["weather"].to<JsonObject>();
+  w["wanted"] = weatherWanted();
+  if (weather_.have) {
+    w["temp"] = weather_.tempTenths / 10.0;
+    w["code"] = weather_.code;
+  } else {
+    w["temp"] = nullptr;
+  }
+  w["unit"] = weather_.fahrenheit ? "f" : "c";
+  w["last_ok"] = weather_.lastOkEpoch;
+  w["error"] = weather_.error;
   std::string out;
   serializeJson(doc, out);
   return out;

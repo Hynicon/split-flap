@@ -108,7 +108,9 @@ The portal is an open network, so once an admin key is set it **only** opens whe
 ## Connecting the platforms
 Every platform needs a free developer app that **you** own. It stays in development/sandbox mode, because it only ever reads your own account. Each one is a one-time setup.
 
-Put the app credentials in `tools/auth/.env`, copied from `.env.example`. That file is git-ignored. Then run the CLI from `tools/`:
+**Easiest, with the app server:** open the app's **Followers** tab and expand **Connect** on a platform. It lists that platform's steps below, shows the exact redirect address to register (`https://<your hostname>/oauth/<platform>/callback`, with a Copy button) and takes the app ID and secret. Then **Connect** opens the platform's own login page and brings you back with the tokens sent to the display. Use the server's redirect address instead of the `https://localhost/` and `http://127.0.0.1:8765/callback/` ones below, and for TikTok choose the **Web** platform in Login Kit. The app ID and secret are kept in the server's `auth.json`; the tokens only pass through its memory. Only admins can connect accounts.
+
+**Without the app server**, use the command-line tool: put the app credentials in `tools/auth/.env`, copied from `.env.example`. That file is git-ignored. Then run the CLI from `tools/`:
 
 ```sh
 cd tools
@@ -179,11 +181,13 @@ The device refreshes the 24-hour access token itself, using the refresh token (v
 
 ## The phone app
 The display serves a phone-sized app at **http://splitflap.local/** (the same app the remote server serves, below). Tabs along the bottom:
-- **Show**: pick what the display shows (followers, one platform, random words, a message, clock, date, the mix, or blank), type a message to show at once, and keep up to 12 saved messages for one-tap use.
+- **Show**: pick what the display shows (followers, one platform, random words, a message, clock, date, weather, a countdown, the mix, or blank), type a message to show at once, keep up to 12 saved messages for one-tap use, and set the **countdown**: a label and a time every day ("CLOSE 25M") or a date and time ("XMAS 12D"), with a text to show once it's over.
 - **Words**: the random word list (up to 100). Add and remove words while it runs: the display shows every word once before repeating any. Change the interval here (20 s at the least).
-- **Mix**: a rotation of up to 8 entries (followers, random word, message, clock, date), each with its own time.
+- **Mix**: a rotation of up to 8 entries (followers, random word, message, clock, date, weather, countdown), each with its own time.
 - **Followers**: platforms on or off, counts, a hand-typed count instead of the API, tokens.
-- **Settings**: text position, speed, clock and date format, quiet hours, time zone, device details, re-home.
+- **Settings**: text position, speed, clock and date format, quiet hours, time zone, **weather** location (latitude and longitude, or **Use this phone's location** on the app server) and °C/°F, device details, re-home.
+
+The weather comes from [Open-Meteo](https://open-meteo.com) (free, no account): the display fetches the temperature and a one-word condition every 15 minutes while Weather is on show, for example `CLOUD 18C` (`NUVEM 18C` with Portuguese month names). There is no minus or degree flap, so below zero it reads `MINUS 3C`.
 
 The app tells you when a text won't fit or uses characters the flaps don't have. On the display's own page, changes need the **admin key** (Settings, at the bottom).
 
@@ -204,7 +208,11 @@ phone ──HTTPS──► nginx-proxy ──► split-flap server (Docker)
 3. **Straight away**, open `https://<your hostname>/`. It shows a one-time **setup page**: choose a username and password, a name for the app and its time zone. Whoever fills it in first owns the server, so don't leave a fresh server unclaimed.
 4. The next page shows the display's **device token**, once. Copy it: you'll enter it on the display. (You can make a new one later under **Settings → Server**.)
 
-Later, the app's **Settings** tab has a **Server** section: change the name and time zone, the username and password (a new password signs out every other phone), or make a new device token.
+Later, the app's **Settings** tab has the server's own sections:
+- **Server**: the app's name and time zone.
+- **Your account**: your username and password. A new password signs you out on your other phones.
+- **People**: add accounts for others. **Admins** can do everything. **Staff** can change what's shown (Show, Words, Mix, the countdown) but not the settings, followers, tokens or accounts; their app shows just those tabs. An admin can change someone's role, give them a new password (which signs them out) or remove them. There is always at least one admin.
+- **Device token**: make a new one.
 
 To start over (for example, if you lost the password): delete `auth.json` from the `splitflap-data` volume and restart the container; in Portainer, Containers → splitflap → **Console**, run `rm /data/auth.json`, then **Restart**. The setup page appears again.
 
@@ -230,7 +238,7 @@ What to expect:
 - A change reaches the display in about a second. If the display is offline, changes wait on the server and are applied when it reconnects.
 - The preview at the top is what the display last reported. Things the display changes by itself (the next random word, the clock) can take up to 25 seconds to show in the preview.
 - The display's own page keeps working on its local network. Its admin key, server address and device token can only be changed there, not through the server.
-- `python -m auth instagram --device https://<your hostname>` sends tokens through the server; give the app's password when it asks for the key. Tokens wait in the server's memory until the display collects them and are never written to its disk.
+- `python -m auth instagram --device https://<your hostname>` sends tokens through the server; give an admin's password when it asks for the key (or just use **Connect** in the app). Tokens wait in the server's memory until the display collects them and are never written to its disk.
 - Mobile data: the display makes a small request about every 25 seconds, in the order of 30 MB a day.
 
 To try the app without hardware: run the server locally (`uvicorn app:app --no-proxy-headers` in `server/`, with `DATA_DIR` set to an empty folder), open http://127.0.0.1:8000/ to set it up, then run `python server/fake_device.py http://127.0.0.1:8000 <device token>`.

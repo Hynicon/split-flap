@@ -51,13 +51,29 @@ class App {
     uint32_t lastAttemptMs = 0;
   };
 
+  struct WeatherState {
+    bool have = false;
+    int32_t tempTenths = 0;
+    int code = -1;
+    bool fahrenheit = false;     // the unit of this reading
+    double lat = 0, lon = 0;     // where this reading is for
+    uint64_t lastOkEpoch = 0;
+    String error = "not fetched yet";
+    uint8_t failures = 0;
+    uint32_t nextFetchMs = 0;
+  };
+
   Source* sourceFor(Platform p);
-  void pollSources();
+  bool pollSources();  // true if it used the network this time
+  void pollWeather();
+  bool weatherWanted() const;
   void updateDisplay();
   std::string desiredFrame(uint32_t now);
   static uint64_t epochNow();
   bool quietNow();
   std::string clockFrame(bool date);
+  std::string weatherFrame();
+  std::string countdownFrame();
 
   std::mutex mu_;
   Config cfg_;
@@ -70,6 +86,7 @@ class App {
                                           {Platform::Instagram, cfg_.manualCount[1]},
                                           {Platform::Facebook, cfg_.manualCount[2]}};
   PlatformState state_[PLATFORM_COUNT];
+  WeatherState weather_;
 
   Rotation rotation_{[]() -> uint32_t { return esp_random(); }};  // which platform, word or mix entry is on show
   bool configChanged_ = true;  // report the settings to the relay after boot

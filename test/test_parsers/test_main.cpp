@@ -91,6 +91,24 @@ void test_tt_refresh() {
   ASSERT_STATUS(FetchStatus::Error, parseTikTokRefresh(200, fixture("malformed.json")).status);
 }
 
+// ---- Open-Meteo ----
+void test_open_meteo() {
+  WeatherResult r = parseOpenMeteo(200, fixture("om_success.json"));
+  ASSERT_STATUS(FetchStatus::Ok, r.status);
+  TEST_ASSERT_EQUAL_INT32(184, r.tempTenths);
+  TEST_ASSERT_EQUAL_INT(3, r.code);
+  WeatherResult neg = parseOpenMeteo(200, R"({"current":{"temperature_2m":-2.6}})");
+  ASSERT_STATUS(FetchStatus::Ok, neg.status);
+  TEST_ASSERT_EQUAL_INT32(-26, neg.tempTenths);
+  TEST_ASSERT_EQUAL_INT(-1, neg.code);  // no weather code: no word
+  WeatherResult err = parseOpenMeteo(400, fixture("om_error.json"));
+  ASSERT_STATUS(FetchStatus::Error, err.status);
+  TEST_ASSERT_TRUE(err.error.find("Latitude") != std::string::npos);
+  ASSERT_STATUS(FetchStatus::Error, parseOpenMeteo(200, fixture("malformed.json")).status);
+  ASSERT_STATUS(FetchStatus::Error, parseOpenMeteo(200, R"({"current":{}})").status);
+  ASSERT_STATUS(FetchStatus::RateLimited, parseOpenMeteo(429, "{}").status);
+}
+
 // ---- secrets never leak ----
 void test_mask() {
   TEST_ASSERT_EQUAL_STRING("", maskSecret("").c_str());
@@ -170,6 +188,7 @@ int main(int, char**) {
   RUN_TEST(test_tt_missing_scope);
   RUN_TEST(test_tt_malformed);
   RUN_TEST(test_tt_refresh);
+  RUN_TEST(test_open_meteo);
   RUN_TEST(test_mask);
   RUN_TEST(test_errors_have_no_tokens);
   RUN_TEST(test_backoff);

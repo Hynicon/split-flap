@@ -15,6 +15,7 @@ FILES = [
     ("server/Dockerfile", "Dockerfile"),
     ("server/requirements.txt", "server/requirements.txt"),
     ("server/app.py", "server/app.py"),
+    ("server/oauth.py", "server/oauth.py"),
 ]
 STATIC = ROOT / "firmware" / "master" / "data"
 

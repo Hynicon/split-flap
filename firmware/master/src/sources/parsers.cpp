@@ -168,3 +168,41 @@ TokenResult parseTikTokRefresh(int httpCode, const std::string& body) {
   r.refreshExpiresIn = doc["refresh_expires_in"] | 0;
   return r;
 }
+
+// ---------- Open-Meteo ----------
+// {"current":{"temperature_2m":18.3,"weather_code":3,...}}; errors: {"error":true,"reason":"..."}
+WeatherResult parseOpenMeteo(int httpCode, const std::string& body) {
+  WeatherResult r;
+  JsonDocument filter;
+  filter["current"]["temperature_2m"] = true;
+  filter["current"]["weather_code"] = true;
+  filter["error"] = true;
+  filter["reason"] = true;
+  JsonDocument doc;
+  DeserializationError e = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+  if (e) {
+    r.status = httpCode == 429 ? FetchStatus::RateLimited : FetchStatus::Error;
+    r.error = "http " + std::to_string(httpCode) + ", bad json: " + e.c_str();
+    return r;
+  }
+  if (doc["error"] | false) {
+    r.status = httpCode == 429 ? FetchStatus::RateLimited : FetchStatus::Error;
+    r.error = "open-meteo: " + truncate(doc["reason"] | "error");
+    return r;
+  }
+  if (httpCode == 429) {
+    r.status = FetchStatus::RateLimited;
+    r.error = "http 429";
+    return r;
+  }
+  JsonVariantConst t = doc["current"]["temperature_2m"];
+  if (httpCode != 200 || !t.is<double>()) {
+    r.error = "http " + std::to_string(httpCode) + ", no current temperature";
+    return r;
+  }
+  double v = t.as<double>();
+  r.tempTenths = (int32_t)(v >= 0 ? v * 10 + 0.5 : v * 10 - 0.5);
+  r.code = doc["current"]["weather_code"].is<int>() ? doc["current"]["weather_code"].as<int>() : -1;
+  r.status = FetchStatus::Ok;
+  return r;
+}

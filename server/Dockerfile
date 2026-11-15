@@ -6,7 +6,7 @@ WORKDIR /srv
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server/app.py .
+COPY server/app.py server/oauth.py ./
 COPY firmware/master/data ./static
 
 # TRUST_PROXY: the container is reached only through nginx-proxy (no published port), so the

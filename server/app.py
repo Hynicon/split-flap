@@ -24,6 +24,7 @@ in DATA_DIR otherwise), TRUST_PROXY=1 when the server is only reachable through 
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections import OrderedDict, deque
 import ipaddress
 import copy
@@ -39,6 +40,8 @@ import urllib.parse
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+
+import oauth
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 ENV_USERNAME = os.environ.get("APP_USERNAME") or "admin"
@@ -203,9 +206,19 @@ def same(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
 
 
+ROLES = ("admin", "staff")
+# What staff may change through POST /api/config: what's on show, not how the display is set up.
+STAFF_CONFIG_KEYS = {"mode", "single", "text", "text_align", "words", "random_seconds", "presets", "mix",
+                     "countdown_label", "countdown_at", "countdown_done"}
+_DUMMY_HASH = hash_password(secrets.token_hex(8))  # so an unknown username takes as long as a wrong password
+
+
 class Account:
-    """The sign-in account, the device token and the server's own settings (DATA_DIR/auth.json).
-    APP_PASSWORD and DEVICE_TOKEN, when set, take the place of the stored ones."""
+    """The people who can sign in, the device token and the server's own settings (DATA_DIR/auth.json).
+
+    Users are stored as {"users": {"<lowercase name>": {"username", "password", "role",
+    "session_epoch", "created"}}}. APP_USERNAME/APP_PASSWORD, when set, add one more admin that lives
+    only in the environment and can't be changed here. DEVICE_TOKEN likewise replaces the stored token."""
 
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -213,33 +226,81 @@ class Account:
             self.data: dict = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             self.data = {}
+        if "password" in self.data and "users" not in self.data:  # the single-account format: one admin
+            name = self.data.pop("username", "admin")
+            self.data["users"] = {name.lower(): {
+                "username": name, "password": self.data.pop("password"), "role": "admin",
+                "session_epoch": self.data.pop("session_epoch", secrets.token_hex(16)), "created": int(time.time())}}
+            self.save()
+        self.data.setdefault("users", {})
 
     def save(self) -> None:
         write_private(AUTH_FILE, json.dumps(self.data))
 
+    # ---- who can sign in
     @property
     def password_from_env(self) -> bool:
         return bool(ENV_PASSWORD)
 
-    @property
-    def token_from_env(self) -> bool:
-        return bool(ENV_DEVICE_TOKEN)
+    def _env_user(self) -> dict | None:
+        if not ENV_PASSWORD:
+            return None
+        epoch = hashlib.sha256(f"env:{ENV_USERNAME}:{ENV_PASSWORD}".encode()).hexdigest()
+        return {"username": ENV_USERNAME, "role": "admin", "env": True, "session_epoch": epoch, "created": 0}
+
+    def user(self, name: str) -> dict | None:
+        key = name.strip().lower()
+        env = self._env_user()
+        if env and key == ENV_USERNAME.lower():
+            return env
+        return self.data["users"].get(key)
+
+    def users(self) -> list[dict]:
+        env = self._env_user()
+        return ([env] if env else []) + sorted(self.data["users"].values(), key=lambda u: u["username"].lower())
+
+    def admin_count(self) -> int:
+        return sum(1 for u in self.users() if u["role"] == "admin")
 
     @property
     def configured(self) -> bool:
-        return self.password_from_env or bool(self.data.get("password"))
+        return self.password_from_env or bool(self.data["users"])
 
-    @property
-    def username(self) -> str:
-        return ENV_USERNAME if self.password_from_env else self.data.get("username", "")
+    def password_ok(self, user: dict, password: str) -> bool:
+        if user.get("env"):
+            return same(password, ENV_PASSWORD)
+        return check_password(password, user["password"])
 
+    def login(self, username: str, password: str) -> dict | None:
+        user = self.user(username)
+        if user is None:
+            check_password(password, _DUMMY_HASH)  # same time as a wrong password
+            return None
+        return user if self.password_ok(user, password) else None
+
+    def admin_with_password(self, password: str) -> dict | None:
+        """For the X-Admin-Key header (tools/auth): any admin's password."""
+        for u in self.users():
+            if u["role"] == "admin" and self.password_ok(u, password):
+                return u
+        return None
+
+    def add_user(self, username: str, password: str, role: str) -> dict:
+        user = {"username": username, "password": hash_password(password), "role": role,
+                "session_epoch": secrets.token_hex(16), "created": int(time.time())}
+        self.data["users"][username.lower()] = user
+        self.save()
+        return user
+
+    def set_password(self, user: dict, password: str) -> None:
+        user["password"] = hash_password(password)
+        user["session_epoch"] = secrets.token_hex(16)  # signs this person out everywhere else
+        self.save()
+
+    # ---- the server's own settings
     @property
-    def session_epoch(self) -> str:
-        """Part of every session's signature. It changes with the password, never repeats (random),
-        and differs after a reset, so old sessions stop working in all those cases."""
-        if self.password_from_env:
-            return hashlib.sha256(f"env:{ENV_USERNAME}:{ENV_PASSWORD}".encode()).hexdigest()
-        return self.data.get("session_epoch", "")
+    def token_from_env(self) -> bool:
+        return bool(ENV_DEVICE_TOKEN)
 
     @property
     def name(self) -> str:
@@ -253,16 +314,6 @@ class Account:
     def has_device_token(self) -> bool:
         return self.token_from_env or bool(self.data.get("device_token"))
 
-    def password_ok(self, password: str) -> bool:
-        if self.password_from_env:
-            return same(password, ENV_PASSWORD)
-        stored = self.data.get("password")
-        return bool(stored) and check_password(password, stored)
-
-    def login_ok(self, username: str, password: str) -> bool:
-        name_ok = same(username.strip().lower(), self.username.lower())
-        return self.password_ok(password) and name_ok  # the password is always checked: same time either way
-
     def device_token_ok(self, token: str) -> bool:
         if self.token_from_env:
             return same(token, ENV_DEVICE_TOKEN)
@@ -275,11 +326,10 @@ class Account:
         self.save()
         return token
 
-    def set_login(self, username: str, password: str) -> None:
-        self.data["username"] = username
-        self.data["password"] = hash_password(password)
-        self.data["session_epoch"] = secrets.token_hex(16)  # signs out every other session
-        self.save()
+
+def public_user(u: dict, me: dict | None = None) -> dict:
+    return {"username": u["username"], "role": u["role"], "env": bool(u.get("env")), "created": u.get("created", 0),
+            "you": bool(me and me["username"].lower() == u["username"].lower())}
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -289,24 +339,35 @@ account = Account()
 # ---------------------------------------------------------------- login
 
 
-def sign(expires: int) -> str:
-    mac = hmac.new(SECRET, f"{expires}.{account.session_epoch}".encode(), hashlib.sha256).hexdigest()
-    return f"{expires}.{mac}"
+def _b64(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
 
 
-def valid_session(cookie: str | None) -> bool:
-    """A session is valid until it expires, the password changes or the account is reset."""
-    if not account.session_epoch:
-        return False
+def _unb64(text: str) -> str:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4)).decode()
+
+
+def sign(user: dict, expires: int) -> str:
+    """name.expires.mac. The mac covers the user's own session epoch, which changes with their
+    password and differs after a reset, so old sessions of that person stop working."""
+    name = _b64(user["username"].lower())
+    mac = hmac.new(SECRET, f"{name}.{expires}.{user['session_epoch']}".encode(), hashlib.sha256).hexdigest()
+    return f"{name}.{expires}.{mac}"
+
+
+def session_user(cookie: str | None) -> dict | None:
     try:
-        expires = int((cookie or "").split(".", 1)[0])
-        return expires > time.time() and hmac.compare_digest(sign(expires), cookie or "")
-    except ValueError:
-        return False
+        name, expires, _ = (cookie or "").split(".", 2)
+        user = account.user(_unb64(name))
+        if user is None or int(expires) <= time.time():
+            return None
+        return user if hmac.compare_digest(sign(user, int(expires)), cookie or "") else None
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
-def start_session(res: Response, request: Request) -> None:
-    res.set_cookie("session", sign(int(time.time()) + SESSION_DAYS * 86400), max_age=SESSION_DAYS * 86400,
+def start_session(res: Response, request: Request, user: dict) -> None:
+    res.set_cookie("session", sign(user, int(time.time()) + SESSION_DAYS * 86400), max_age=SESSION_DAYS * 86400,
                    httponly=True, secure=is_https(request), samesite="lax")
 
 
@@ -442,22 +503,35 @@ def wrong_password(ip: str) -> None:
               f"from {len(FAILS)} networks", flush=True)
 
 
-async def logged_in(request: Request) -> bool:
-    if valid_session(request.cookies.get("session")):
-        return True
-    # Scripts (tools/auth) send the password in the header the display's own API uses.
+async def signed_in_user(request: Request) -> dict | None:
+    user = session_user(request.cookies.get("session"))
+    if user:
+        return user
+    # Scripts (tools/auth) send an admin's password in the header the display's own API uses.
     key = request.headers.get("x-admin-key", "")
     if not key:
-        return False
+        return None
     ip = client_ip(request)
     if locked_out(ip):
-        return False
-    if account.password_ok(key):
+        return None
+    user = account.admin_with_password(key)
+    if user:
         good_password(ip)
-        return True
+        return user
     wrong_password(ip)
     await asyncio.sleep(1)
-    return False
+    return None
+
+
+def me(request: Request) -> dict:
+    return request.state.user
+
+
+def admin_only(request: Request) -> JSONResponse | None:
+    """A 403 for staff, None for admins."""
+    if me(request)["role"] != "admin":
+        return no_store({"error": "Only an admin can do this."}, 403)
+    return None
 
 
 PAGE = """<!doctype html>
@@ -545,7 +619,11 @@ async def require_login(request: Request, call_next):
         if path.startswith("/api/"):
             return JSONResponse({"error": "This server hasn't been set up yet. Open it in a browser."}, status_code=503)
         return RedirectResponse("/setup", status_code=303)
-    if path in PUBLIC_PATHS or await logged_in(request):
+    if path in PUBLIC_PATHS:
+        return await call_next(request)
+    user = await signed_in_user(request)
+    if user:
+        request.state.user = user
         return await call_next(request)
     if path.startswith("/api/"):
         return JSONResponse({"error": "not signed in"}, status_code=401)
@@ -581,11 +659,11 @@ async def setup(request: Request):
         if tz and not TZ_RE.match(tz):
             return setup_page_html("That doesn't look like a time zone name, such as Europe/Lisbon.", 400, keep)
         account.data.update({"display_name": name, "time_zone": tz})
-        account.set_login(username, password)
+        user = account.add_user(username, password, "admin")
         token = None if account.token_from_env else account.new_device_token()
         print(f"Setup finished: account '{username}' created.", flush=True)
     res = setup_done_html(token)
-    start_session(res, request)
+    start_session(res, request, user)
     return res
 
 
@@ -593,7 +671,7 @@ async def setup(request: Request):
 async def login_page(request: Request):
     if not account.configured:
         return RedirectResponse("/setup", status_code=303)
-    if await logged_in(request):
+    if await signed_in_user(request):
         return RedirectResponse("/", status_code=303)
     return login_page_html()
 
@@ -612,13 +690,14 @@ async def login(request: Request):
     username = form.get("username", "")
     if locked_out(ip):  # again: other guesses may have landed while the body was read
         return login_page_html(LOCKED_MSG, 429, username)
-    if not account.login_ok(username, form.get("password", "")):
+    user = account.login(username, form.get("password", ""))
+    if not user:
         wrong_password(ip)
         await asyncio.sleep(1)
         return login_page_html("Wrong username or password.", 401, username)
     good_password(ip)
     res = RedirectResponse("/", status_code=303)
-    start_session(res, request)
+    start_session(res, request, user)
     return res
 
 
@@ -703,10 +782,11 @@ def no_store(payload: dict, code: int = 200) -> JSONResponse:
 
 
 @app.get("/api/status")
-async def api_status():
+async def api_status(request: Request):
     status = copy.deepcopy(state.status) if state.status else {}
     status["via"] = "server"
     status["server"] = {"name": account.name, "time_zone": account.time_zone}
+    status["me"] = {"username": me(request)["username"], "role": me(request)["role"]}
     status["device"] = {
         "online": state.online,
         "last_seen": int(state.last_seen),
@@ -726,9 +806,15 @@ async def api_config():
 
 
 async def queue(request: Request, kind: str):
+    if kind in ("rehome", "tokens") and (denied := admin_only(request)):
+        return denied
     body = await read_json(request)
     if body is None:
         return no_store({"error": "expected a JSON object"}, 400)
+    if kind == "config" and me(request)["role"] != "admin":
+        extra = sorted(k for k in body if k not in STAFF_CONFIG_KEYS)
+        if extra:
+            return no_store({"error": f"Only an admin can change {extra[0]}."}, 403)
     if kind == "config":
         blocked = [k for k in LOCAL_ONLY if k in body]
         if blocked:
@@ -764,34 +850,42 @@ async def api_tokens(request: Request):
 
 def server_info() -> dict:
     return {
-        "username": account.username,
         "display_name": account.data.get("display_name", ""),
         "time_zone": account.time_zone,
-        "password_from_env": account.password_from_env,
         "device_token_from_env": account.token_from_env,
         "device_token_set": account.has_device_token,
     }
 
 
 async def current_password_ok(request: Request, body: dict) -> bool:
-    """Changing the account or the device token needs the current password, counted like a sign-in."""
+    """Changing an account or the device token needs the current password, counted like a sign-in."""
     ip = client_ip(request)
     if locked_out(ip):
         return False
-    if account.password_ok(str(body.get("current_password", ""))):
+    if account.password_ok(me(request), str(body.get("current_password", ""))):
         return True
     wrong_password(ip)
     await asyncio.sleep(1)
     return False
 
 
+def valid_new_password(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) < MIN_PASSWORD:
+        return f"The password needs at least {MIN_PASSWORD} characters."
+    return None
+
+
 @app.get("/api/server")
-async def api_server():
+async def api_server(request: Request):
+    if denied := admin_only(request):
+        return denied
     return no_store(server_info())
 
 
 @app.post("/api/server")
 async def api_server_post(request: Request):
+    if denied := admin_only(request):
+        return denied
     body = await read_json(request)
     if body is None:
         return no_store({"error": "expected a JSON object"}, 400)
@@ -801,38 +895,19 @@ async def api_server_post(request: Request):
         tz = body["time_zone"]
         if not isinstance(tz, str) or (tz.strip() and not TZ_RE.match(tz.strip())):
             return no_store({"error": "That doesn't look like a time zone name, such as Europe/Lisbon."}, 400)
-    changes_login = "new_password" in body or "username" in body
-    password_changed = False
     async with account.lock:
-        if changes_login:
-            if account.password_from_env:
-                return no_store({"error": "The account is set by the APP_PASSWORD variable."}, 400)
-            username = str(body.get("username", account.username)).strip()
-            new_password = body.get("new_password")
-            if not USERNAME_RE.match(username):
-                return no_store({"error": "Choose a username of up to 40 characters, without spaces."}, 400)
-            if new_password is not None and (not isinstance(new_password, str) or len(new_password) < MIN_PASSWORD):
-                return no_store({"error": f"The new password needs at least {MIN_PASSWORD} characters."}, 400)
-            if not await current_password_ok(request, body):
-                return no_store({"error": "The current password is wrong."}, 403)
-            if new_password is None:
-                account.data["username"] = username
-            else:
-                account.set_login(username, new_password)
-                password_changed = True
         if "display_name" in body:
             account.data["display_name"] = clean_name(body["display_name"]) or ""
         if "time_zone" in body:
             account.data["time_zone"] = body["time_zone"].strip()
         account.save()
-    res = no_store({**server_info(), "signed_out_others": password_changed})
-    if password_changed:
-        start_session(res, request)  # this phone stays signed in under the new password
-    return res
+    return no_store(server_info())
 
 
 @app.post("/api/server/device-token")
 async def api_device_token(request: Request):
+    if denied := admin_only(request):
+        return denied
     body = await read_json(request)
     if body is None:
         return no_store({"error": "expected a JSON object"}, 400)
@@ -843,6 +918,273 @@ async def api_device_token(request: Request):
             return no_store({"error": "The current password is wrong."}, 403)
         token = account.new_device_token()
     return no_store({"device_token": token})
+
+
+@app.get("/api/me")
+async def api_me(request: Request):
+    return no_store(public_user(me(request), me(request)))
+
+
+@app.post("/api/me")
+async def api_me_post(request: Request):
+    """Your own username or password; needs your current password."""
+    body = await read_json(request)
+    if body is None:
+        return no_store({"error": "expected a JSON object"}, 400)
+    user = me(request)
+    if user.get("env"):
+        return no_store({"error": "This account is set by the APP_PASSWORD variable."}, 400)
+    async with account.lock:
+        username = str(body.get("username", user["username"])).strip()
+        if not USERNAME_RE.match(username):
+            return no_store({"error": "Choose a username of up to 40 characters, without spaces."}, 400)
+        other = account.user(username)
+        if other is not None and other is not user:
+            return no_store({"error": "That username is taken."}, 409)
+        if "new_password" in body and (err := valid_new_password(body["new_password"])):
+            return no_store({"error": err}, 400)
+        if not await current_password_ok(request, body):
+            return no_store({"error": "The current password is wrong."}, 403)
+        if username != user["username"]:
+            account.data["users"].pop(user["username"].lower())
+            user["username"] = username
+            account.data["users"][username.lower()] = user
+        if "new_password" in body:
+            account.set_password(user, body["new_password"])
+        account.save()
+    res = no_store({**public_user(user, user), "signed_out_others": "new_password" in body})
+    start_session(res, request, user)  # a new name or password changes this phone's session too
+    return res
+
+
+@app.get("/api/users")
+async def api_users(request: Request):
+    if denied := admin_only(request):
+        return denied
+    return no_store({"users": [public_user(u, me(request)) for u in account.users()]})
+
+
+@app.post("/api/users")
+async def api_users_add(request: Request):
+    if denied := admin_only(request):
+        return denied
+    body = await read_json(request)
+    if body is None:
+        return no_store({"error": "expected a JSON object"}, 400)
+    username = str(body.get("username", "")).strip()
+    role = body.get("role", "staff")
+    if not USERNAME_RE.match(username):
+        return no_store({"error": "Choose a username of up to 40 characters, without spaces."}, 400)
+    if role not in ROLES:
+        return no_store({"error": "role must be admin or staff"}, 400)
+    if err := valid_new_password(body.get("password")):
+        return no_store({"error": err}, 400)
+    async with account.lock:
+        if account.user(username) is not None:
+            return no_store({"error": "That username is taken."}, 409)
+        user = account.add_user(username, body["password"], role)
+    print(f"User '{username}' ({role}) added by '{me(request)['username']}'.", flush=True)
+    return no_store(public_user(user, me(request)))
+
+
+def _target(name: str) -> tuple[dict | None, JSONResponse | None]:
+    user = account.user(name)
+    if user is None:
+        return None, no_store({"error": "No such user."}, 404)
+    if user.get("env"):
+        return None, no_store({"error": "This account is set by the APP_PASSWORD variable."}, 400)
+    return user, None
+
+
+@app.post("/api/users/{name}")
+async def api_users_change(name: str, request: Request):
+    """Change someone's role, or give them a new password (which signs them out)."""
+    if denied := admin_only(request):
+        return denied
+    body = await read_json(request)
+    if body is None:
+        return no_store({"error": "expected a JSON object"}, 400)
+    async with account.lock:
+        user, err = _target(name)
+        if err:
+            return err
+        role = body.get("role", user["role"])
+        if role not in ROLES:
+            return no_store({"error": "role must be admin or staff"}, 400)
+        if user["role"] == "admin" and role != "admin" and account.admin_count() <= 1:
+            return no_store({"error": "There must be at least one admin."}, 400)
+        if "password" in body and (perr := valid_new_password(body["password"])):
+            return no_store({"error": perr}, 400)
+        user["role"] = role
+        if "password" in body:
+            account.set_password(user, body["password"])
+        account.save()
+    return no_store(public_user(user, me(request)))
+
+
+@app.delete("/api/users/{name}")
+async def api_users_delete(name: str, request: Request):
+    if denied := admin_only(request):
+        return denied
+    if from_elsewhere(request):
+        return no_store({"error": "refused"}, 403)
+    async with account.lock:
+        user, err = _target(name)
+        if err:
+            return err
+        if user["role"] == "admin" and account.admin_count() <= 1:
+            return no_store({"error": "There must be at least one admin."}, 400)
+        account.data["users"].pop(user["username"].lower())
+        account.save()
+    print(f"User '{user['username']}' removed by '{me(request)['username']}'.", flush=True)
+    return no_store({"ok": True})
+
+
+# ---------------------------------------------------------------- connecting the social accounts
+# The platform's login page sends the browser back to /oauth/<platform>/callback on this server,
+# which swaps the code for tokens (server/oauth.py) and queues them for the display like
+# POST /api/tokens does: in memory only, never on disk. Each platform needs your own developer
+# app; its ID and secret are kept in auth.json.
+
+OAUTH_STATES: dict[str, dict] = {}   # state -> {platform, user, redirect, expires}; single use
+OAUTH_PENDING: dict[str, dict] = {}  # Facebook Page choice -> {pages, creds, user, expires}
+OAUTH_RESULTS: dict[str, dict] = {}  # platform -> the last connection attempt, for the app
+OAUTH_TTL = 600
+
+
+def redirect_uri(request: Request, platform: str) -> str:
+    """The address to register with the platform. Behind nginx-proxy the Host header is the site's."""
+    scheme = "https" if is_https(request) else request.url.scheme
+    host = request.headers.get("host", request.url.netloc)
+    return f"{scheme}://{host}/oauth/{platform}/callback"
+
+
+def integration(platform: str) -> dict:
+    return account.data.setdefault("integrations", {}).get(platform, {})
+
+
+def _prune_oauth() -> None:
+    now = time.time()
+    for table in (OAUTH_STATES, OAUTH_PENDING):
+        for key in [k for k, v in table.items() if v["expires"] < now]:
+            table.pop(key, None)
+
+
+@app.get("/api/integrations")
+async def api_integrations(request: Request):
+    if denied := admin_only(request):
+        return denied
+    out = {}
+    for platform in oauth.PLATFORMS:
+        creds = integration(platform)
+        out[platform] = {"app_id": creds.get("app_id", ""), "secret_set": bool(creds.get("app_secret")),
+                         "redirect_uri": redirect_uri(request, platform), "last": OAUTH_RESULTS.get(platform)}
+    return no_store(out)
+
+
+@app.post("/api/integrations")
+async def api_integrations_post(request: Request):
+    """{platform, app_id, app_secret}: the secret is kept if left out or empty."""
+    if denied := admin_only(request):
+        return denied
+    body = await read_json(request)
+    if body is None:
+        return no_store({"error": "expected a JSON object"}, 400)
+    platform = body.get("platform")
+    if platform not in oauth.PLATFORMS:
+        return no_store({"error": "platform must be instagram, facebook or tiktok"}, 400)
+    app_id = str(body.get("app_id", "")).strip()
+    secret = str(body.get("app_secret", "") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]{1,100}", app_id) or len(secret) > 200:
+        return no_store({"error": "That doesn't look like an app ID."}, 400)
+    async with account.lock:
+        creds = account.data.setdefault("integrations", {}).setdefault(platform, {})
+        creds["app_id"] = app_id
+        if secret:
+            creds["app_secret"] = secret
+        account.save()
+    return no_store({"ok": True, "secret_set": bool(creds.get("app_secret"))})
+
+
+def back_to_app(platform: str, ok: bool, message: str = "", account_name: str = "", followers: int | None = None):
+    OAUTH_RESULTS[platform] = {"ok": ok, "message": message[:300], "account": account_name, "followers": followers,
+                               "at": int(time.time())}
+    return RedirectResponse(f"/?connected={platform}", status_code=303)
+
+
+def connected(platform: str, result: dict):
+    if len(state.pending) >= MAX_PENDING:
+        return back_to_app(platform, False, "Too many changes are waiting for the display. Try again when it is back online.")
+    state.enqueue("tokens", result["payload"])
+    note = "" if state.online else "The display is offline: it will pick this up when it reconnects."
+    return back_to_app(platform, True, note, result.get("account", ""), result.get("followers"))
+
+
+@app.get("/oauth/{platform}/start")
+async def oauth_start(platform: str, request: Request):
+    if platform not in oauth.PLATFORMS:
+        return no_store({"error": "not found"}, 404)
+    if me(request)["role"] != "admin":
+        return back_to_app(platform, False, "Only an admin can connect accounts.")
+    creds = integration(platform)
+    if not creds.get("app_id") or not creds.get("app_secret"):
+        return back_to_app(platform, False, "Enter your app's ID and secret first.")
+    _prune_oauth()
+    key = secrets.token_urlsafe(24)
+    redirect = redirect_uri(request, platform)
+    OAUTH_STATES[key] = {"platform": platform, "user": me(request)["username"].lower(), "redirect": redirect,
+                         "expires": time.time() + OAUTH_TTL}
+    return RedirectResponse(oauth.authorize_url(platform, creds, redirect, key), status_code=303)
+
+
+@app.get("/oauth/{platform}/callback")
+async def oauth_callback(platform: str, request: Request):
+    if platform not in oauth.PLATFORMS:
+        return no_store({"error": "not found"}, 404)
+    q = request.query_params
+    pending = OAUTH_STATES.pop(q.get("state", ""), None)  # single use, whatever happens next
+    if (not pending or pending["platform"] != platform or pending["expires"] < time.time()
+            or pending["user"] != me(request)["username"].lower()):
+        return back_to_app(platform, False, "That login link has expired or wasn't started here. Press Connect again.")
+    if q.get("error") or not q.get("code"):
+        reason = q.get("error_description") or q.get("error_reason") or q.get("error") or "no code came back"
+        return back_to_app(platform, False, f"The login didn't finish: {reason}")
+    creds = integration(platform)
+    try:
+        result = await asyncio.to_thread(oauth.exchange, platform, creds, pending["redirect"], q["code"])
+    except oauth.OAuthError as e:
+        return back_to_app(platform, False, str(e))
+    if "pages" in result:  # several Facebook Pages: ask which one
+        key = secrets.token_urlsafe(24)
+        OAUTH_PENDING[key] = {"pages": result["pages"], "user": pending["user"], "expires": time.time() + OAUTH_TTL}
+        buttons = "".join(
+            f'<button type="submit" name="page" value="{html.escape(pg["id"])}" class="quiet wide">{html.escape(pg["name"])}</button>'
+            for pg in result["pages"])
+        return page("Choose a Page", f"""<form method="post" action="/oauth/facebook/page" class="card">
+<h1>Which Page?</h1>
+<p class="hint">You manage several Facebook Pages. The display will show this one's followers.</p>
+<input type="hidden" name="pending" value="{key}">
+{buttons}
+</form>""")
+    return connected(platform, result)
+
+
+@app.post("/oauth/facebook/page")
+async def oauth_facebook_page(request: Request):
+    if from_elsewhere(request):
+        return back_to_app("facebook", False, "Open the app and press Connect again.")
+    form = form_fields(await request.body())
+    pending = OAUTH_PENDING.pop(form.get("pending", ""), None)
+    if not pending or pending["expires"] < time.time() or pending["user"] != me(request)["username"].lower():
+        return back_to_app("facebook", False, "That choice has expired. Press Connect again.")
+    chosen = next((pg for pg in pending["pages"] if pg["id"] == form.get("page")), None)
+    if not chosen:
+        return back_to_app("facebook", False, "That Page wasn't in the list. Press Connect again.")
+    try:
+        result = await asyncio.to_thread(oauth.facebook_page, chosen)
+    except oauth.OAuthError as e:
+        return back_to_app("facebook", False, str(e))
+    return connected("facebook", result)
 
 
 # ---------------------------------------------------------------- the app's files

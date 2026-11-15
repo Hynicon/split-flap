@@ -60,7 +60,7 @@ def test_setup_creates_the_account_and_a_device_token(fresh):
     assert other.get("/setup").headers["location"] == "/login"
     r = other.post("/setup", data={"username": "evil", "password": "x" * 20, "password2": "x" * 20})
     assert r.status_code == 303 and r.headers["location"] == "/login"
-    assert json.loads(auth)["username"] == "trailer"
+    assert list(json.loads(auth)["users"]) == ["trailer"]
     # sign in with the new account
     assert other.post("/login", data={"username": "trailer", "password": PW}).status_code == 303
     assert other.get("/api/status").status_code == 200
@@ -93,9 +93,9 @@ def test_change_password_signs_out_other_phones(fresh):
     phone2 = httpx.Client(base_url=fresh.url, timeout=10)
     assert phone2.post("/login", data={"username": "trailer", "password": PW}).status_code == 303
     new = "an even longer password"
-    r = phone1.post("/api/server", json={"current_password": "wrong one", "new_password": new})
+    r = phone1.post("/api/me", json={"current_password": "wrong one", "new_password": new})
     assert r.status_code == 403
-    r = phone1.post("/api/server", json={"current_password": PW, "new_password": new})
+    r = phone1.post("/api/me", json={"current_password": PW, "new_password": new})
     assert r.status_code == 200 and r.json()["signed_out_others"]
     assert phone1.get("/api/status").status_code == 200  # this phone got a new session
     assert phone2.get("/api/status").status_code == 401  # the other one is signed out
@@ -120,8 +120,8 @@ def test_name_and_time_zone_need_no_password(fresh):
     assert client.get("/api/status").json()["server"] == {"name": "Burritos", "time_zone": "America/New_York"}
     assert client.post("/api/server", json={"time_zone": "not a zone!"}).status_code == 400
     # the account is untouched without the password
-    assert client.post("/api/server", json={"username": "someone"}).status_code == 403
-    assert client.get("/api/server").json()["username"] == "trailer"
+    assert client.post("/api/me", json={"username": "someone"}).status_code == 403
+    assert client.get("/api/me").json()["username"] == "trailer"
 
 
 def test_environment_variables_skip_setup(tmp_path):
@@ -131,9 +131,9 @@ def test_environment_variables_skip_setup(tmp_path):
         c = httpx.Client(base_url=s.url, timeout=10)
         assert c.get("/setup").headers["location"] == "/login"
         assert c.post("/login", data={"username": "admin", "password": "correct horse battery"}).status_code == 303
-        info = c.get("/api/server").json()
-        assert info["password_from_env"] and info["device_token_from_env"]
-        assert c.post("/api/server", json={"current_password": "correct horse battery", "new_password": "x" * 20}).status_code == 400
+        assert c.get("/api/server").json()["device_token_from_env"]
+        assert c.get("/api/me").json() == {"username": "admin", "role": "admin", "env": True, "created": 0, "you": True}
+        assert c.post("/api/me", json={"current_password": "correct horse battery", "new_password": "x" * 20}).status_code == 400
         assert c.post("/api/server/device-token", json={"current_password": "correct horse battery"}).status_code == 400
     finally:
         s.stop()

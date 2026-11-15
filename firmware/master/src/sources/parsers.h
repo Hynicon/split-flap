@@ -42,5 +42,14 @@ TokenResult parseInstagramRefresh(int httpCode, const std::string& body);
 // POST open.tiktokapis.com/v2/oauth/token/ grant_type=refresh_token
 TokenResult parseTikTokRefresh(int httpCode, const std::string& body);
 
+struct WeatherResult {
+  FetchStatus status = FetchStatus::Error;
+  int32_t tempTenths = 0;  // tenths of a degree, in the unit that was asked for
+  int code = -1;           // WMO weather code, -1 if missing
+  std::string error;
+};
+// GET api.open-meteo.com/v1/forecast?latitude=..&longitude=..&current=temperature_2m,weather_code
+WeatherResult parseOpenMeteo(int httpCode, const std::string& body);
+
 // Keeps only the last 4 characters, e.g. "…a1b2". Use for every log/web display of a secret.
 std::string maskSecret(const std::string& secret);

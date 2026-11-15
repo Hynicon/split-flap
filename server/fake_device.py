@@ -34,8 +34,11 @@ config = {
     "quiet_start": "00:00", "quiet_end": "00:00", "timezone": "UTC0", "celebrate": False, "milestone_step": 1000,
     "random_seconds": 60, "mix": [], "clock_24h": True, "date_lang": "en",
     "words": ["TACOS", "BURRITO", "NACHOS"], "presets": ["OPEN", "SOLD OUT", "BACK SOON"],
+    "weather_lat": "", "weather_lon": "", "weather_unit": "c",
+    "countdown_label": "", "countdown_at": "", "countdown_done": "",
     "remote_url": "", "remote_token_set": True, "admin_key_set": True,
 }
+FAKE_WEATHER = {"temp": 18.4, "code": 3}  # pretend reading, in °C
 show = {"mode": None, "started": 0.0, "index": -1, "word": "", "platform": -1, "left": 0}
 started = time.time()
 
@@ -76,6 +79,43 @@ def clock() -> str:
 def date() -> str:
     now = time.localtime()
     return place(f"{now.tm_mday} {MONTHS[config['date_lang']][now.tm_mon - 1]}")
+
+
+def weather() -> str:
+    if config["weather_lat"] == "":
+        return " " * config["units"]
+    t = FAKE_WEATHER["temp"] * 9 / 5 + 32 if config["weather_unit"] == "f" else FAKE_WEATHER["temp"]
+    n = f"{round(abs(t))}{config['weather_unit'].upper()}"
+    word = {"en": "CLOUD", "pt": "NUVEM"}[config["date_lang"]]
+    forms = [f"MINUS {n}", f"M{n}"] if round(t) < 0 else [f"{word} {n}", n]
+    return next((place(f) for f in forms if len(f) <= config["units"]), " " * config["units"])
+
+
+def countdown() -> str:
+    at = config["countdown_at"]
+    if not at:
+        return " " * config["units"]
+    now = time.time()
+    if "T" in at:
+        left = time.mktime(time.strptime(at, "%Y-%m-%dT%H:%M")) - now
+    else:
+        h, m = map(int, at.split(":"))
+        t = time.localtime(now)
+        target = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, h, m, 0, 0, 0, -1))
+        left = target - now if target > now else target + 86400 - now
+    if left <= 0:
+        return place(config["countdown_done"] or config["countdown_label"])
+    left = int(left)
+    if left >= 2 * 86400:
+        d, h = divmod(left, 86400)
+        full, brief = f"{d}D" + (f"{h // 3600}H" if h // 3600 else ""), f"{d}D"
+    elif left >= 3600:
+        full, brief = f"{left // 3600}H{left % 3600 // 60:02d}M", f"{left // 3600}H"
+    else:
+        full = brief = f"{(left + 59) // 60}M"
+    label = fold(config["countdown_label"]).strip()
+    forms = ([f"{label} {full}", f"{label} {brief}"] if label else []) + [full, brief]
+    return next((place(f) for f in forms if len(f) <= config["units"]), " " * config["units"])
 
 
 def enabled() -> list[str]:
@@ -121,6 +161,10 @@ def frame() -> str:
         return clock()
     if mode == "date":
         return date()
+    if mode == "weather":
+        return weather()
+    if mode == "countdown":
+        return countdown()
     if mode == "single":
         return followers(config["single"])
     if mode == "cycle":
@@ -159,7 +203,8 @@ def frame() -> str:
                 next_word()
     kind = mix[show["index"]]["kind"]
     return {"followers": lambda: followers(PLATFORMS[show["platform"]]), "random": lambda: place(show["word"], config["text_align"]),
-            "text": lambda: place(config["text"], config["text_align"]), "clock": clock, "date": date}[kind]()
+            "text": lambda: place(config["text"], config["text_align"]), "clock": clock, "date": date,
+            "weather": weather, "countdown": countdown}[kind]()
 
 
 def status() -> dict:
@@ -172,7 +217,10 @@ def status() -> dict:
     return {"uptime_s": int(time.time() - started), "reset_reason": "power_on", "free_heap": 180000, "time": int(time.time()),
             "wifi": {"ssid": "fake-hotspot", "rssi": -58, "ip": "10.0.0.2"},
             "display": {"frame": frame(), "quiet": False, "busy": False},
-            "bus": {"units": config["units"], "present": [True] * config["units"], "error": ""}, "platforms": platforms}
+            "bus": {"units": config["units"], "present": [True] * config["units"], "error": ""}, "platforms": platforms,
+            "weather": {"wanted": config["mode"] == "weather" or any(m["kind"] == "weather" for m in config["mix"]),
+                        "temp": (round(FAKE_WEATHER["temp"] * 9 / 5 + 32, 1) if config["weather_unit"] == "f" else FAKE_WEATHER["temp"]) if config["weather_lat"] != "" else None, "code": FAKE_WEATHER["code"],
+                        "unit": config["weather_unit"], "last_ok": int(time.time()), "error": ""}}
 
 
 def run(cmd: dict) -> str:

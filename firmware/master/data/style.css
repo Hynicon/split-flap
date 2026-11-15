@@ -190,3 +190,22 @@ a.button { display: flex; align-items: center; justify-content: center; min-heig
 
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
 @media (min-width: 560px) { .modes { grid-template-columns: repeat(4, 1fr); } }
+
+/* ---- roles: staff see what's on show, not the setup ---- */
+body[data-role="staff"] .admin-only { display: none !important; }
+
+/* ---- connecting a platform ---- */
+.platform .connect { grid-column: 1 / -1; border-top: 1px solid var(--line); margin-top: 8px; }
+.steps { margin: 4px 0 10px; padding-left: 22px; font-size: .9375rem; }
+.steps li { margin: 6px 0; }
+.steps a { color: var(--accent); }
+.hint.ok { color: var(--ok); }
+.hint.bad { color: var(--bad); }
+a.button.disabled { opacity: .5; }
+.connect .inline { margin-top: 4px; }
+
+/* ---- people ---- */
+.list li.user { flex-wrap: wrap; }
+.list li.user select { width: auto; flex: none; }
+.list li.user .user-pw { flex-basis: 100%; }
+#user-add { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }

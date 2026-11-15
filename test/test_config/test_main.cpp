@@ -169,6 +169,61 @@ void test_token_update() {
   TEST_ASSERT_FALSE(parseTokenUpdate(R"({"platform":"x","access_token":"a"})", t).empty());
 }
 
+void test_weather_and_countdown_settings() {
+  Config c;
+  TEST_ASSERT_EQUAL_STRING("", applyConfigJson(c, R"({"mode":"weather","weather_lat":38.72,"weather_lon":-9.14,"weather_unit":"f","countdown_label":"Close","countdown_at":"21:30","countdown_done":"CLOSED","mix":[{"kind":"weather"},{"kind":"countdown","seconds":30}]})").c_str());
+  TEST_ASSERT_TRUE(c.mode == DisplayMode::Weather && c.weatherSet && c.weatherFahrenheit);
+  TEST_ASSERT_TRUE(c.weatherLon > -9.1401 && c.weatherLon < -9.1399);
+  TEST_ASSERT_TRUE(c.mix[0].kind == MixKind::Weather && c.mix[1].kind == MixKind::Countdown);
+  TEST_ASSERT_EQUAL_STRING("21:30", c.countdownAt.c_str());
+  TEST_ASSERT_EQUAL_STRING("", applyConfigJson(c, R"({"mode":"countdown","countdown_at":"2026-12-24T18:00"})").c_str());
+  TEST_ASSERT_TRUE(c.mode == DisplayMode::Countdown);
+  c.adminKey = "secret-key-123";
+  Config d;
+  TEST_ASSERT_EQUAL_STRING("", applyConfigJson(d, configToJson(c, true)).c_str());
+  TEST_ASSERT_EQUAL_STRING(configToJson(c, true).c_str(), configToJson(d, true).c_str());
+  // both empty switches the weather off, and that survives a round trip
+  TEST_ASSERT_EQUAL_STRING("", applyConfigJson(c, R"({"weather_lat":"","weather_lon":""})").c_str());
+  TEST_ASSERT_FALSE(c.weatherSet);
+  Config e;
+  TEST_ASSERT_EQUAL_STRING("", applyConfigJson(e, configToJson(c, true)).c_str());
+  TEST_ASSERT_FALSE(e.weatherSet);
+  const char* bad[] = {
+      R"({"weather_lat":91,"weather_lon":0})",
+      R"({"weather_lat":10})",
+      R"({"weather_lat":"38","weather_lon":"-9"})",
+      R"({"weather_unit":"k"})",
+      R"({"countdown_at":"25:00"})",
+      R"({"countdown_at":"2026-02-29T10:00"})",
+      R"({"countdown_at":"2026-13-01T10:00"})",
+      R"({"countdown_at":"tomorrow"})",
+      R"({"countdown_label":"0123456789012345678901234567890123"})",
+  };
+  for (const char* json : bad) {
+    std::string before = configToJson(c, true);
+    TEST_ASSERT_FALSE_MESSAGE(applyConfigJson(c, json).empty(), json);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(before.c_str(), configToJson(c, true).c_str(), json);
+  }
+  TEST_ASSERT_EQUAL_STRING("", applyConfigJson(c, R"({"countdown_at":"2028-02-29T10:00"})").c_str());  // leap year
+}
+
+void test_seconds_until() {
+  CountdownTarget t;
+  TEST_ASSERT_TRUE(parseCountdownAt("21:30", t));
+  TEST_ASSERT_TRUE(t.daily);
+  TEST_ASSERT_EQUAL_INT64(30 * 60, secondsUntil(t, 2026, 11, 14, 21, 0, 0));
+  TEST_ASSERT_EQUAL_INT64(86400 - 60, secondsUntil(t, 2026, 11, 14, 21, 31, 0));  // passed: tomorrow's
+  TEST_ASSERT_EQUAL_INT64(86400, secondsUntil(t, 2026, 11, 14, 21, 30, 0));       // exactly now: the next one
+  TEST_ASSERT_TRUE(parseCountdownAt("2026-12-24T18:00", t));
+  TEST_ASSERT_FALSE(t.daily);
+  TEST_ASSERT_EQUAL_INT64(40LL * 86400 + 6 * 3600, secondsUntil(t, 2026, 11, 14, 12, 0, 0));
+  TEST_ASSERT_EQUAL_INT64(-60, secondsUntil(t, 2026, 12, 24, 18, 1, 0));  // over
+  TEST_ASSERT_TRUE(parseCountdownAt("2027-01-01T00:00", t));
+  TEST_ASSERT_EQUAL_INT64(1, secondsUntil(t, 2026, 12, 31, 23, 59, 59));  // across a year end
+  TEST_ASSERT_TRUE(parseCountdownAt("2028-03-01T00:00", t));
+  TEST_ASSERT_EQUAL_INT64(2 * 86400, secondsUntil(t, 2028, 2, 28, 0, 0, 0));  // a leap day in between
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_defaults_round_trip);
@@ -179,5 +234,7 @@ int main(int, char**) {
   RUN_TEST(test_word_list_limits);
   RUN_TEST(test_remote_settings);
   RUN_TEST(test_token_update);
+  RUN_TEST(test_weather_and_countdown_settings);
+  RUN_TEST(test_seconds_until);
   return UNITY_END();
 }

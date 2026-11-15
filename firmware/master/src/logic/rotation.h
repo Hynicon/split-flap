@@ -9,7 +9,7 @@
 
 #include "logic/config.h"
 
-enum class SceneKind : uint8_t { Blank, Followers, Word, Text, Clock, Date };
+enum class SceneKind : uint8_t { Blank, Followers, Word, Text, Clock, Date, Weather, Countdown };
 
 struct Scene {
   SceneKind kind = SceneKind::Blank;

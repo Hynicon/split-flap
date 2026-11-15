@@ -1,5 +1,7 @@
 #include "display/layout.h"
 
+#include <stdio.h>
+
 #include <algorithm>
 
 #include "charset.h"
@@ -110,6 +112,71 @@ std::string composeDate(uint8_t day, uint8_t month, DateLang lang, uint8_t units
   std::string d = std::to_string(day), m = (lang == DateLang::Pt ? PT : EN)[month - 1];
   const std::string forms[] = {d + " " + m, d + m, m};
   return firstThatFits(forms, 3, units);
+}
+
+// Like firstThatFits, for candidates that are already flap bytes (folded), which must not be folded again.
+static std::string firstFlapsThatFit(const std::string* candidates, size_t count, uint8_t units) {
+  for (size_t i = 0; i < count; i++) {
+    const std::string& f = candidates[i];
+    if (f.empty() || f.size() > units) continue;
+    size_t pad = units - f.size();
+    return std::string(pad / 2, ' ') + f + std::string(pad - pad / 2, ' ');
+  }
+  return std::string(units, ' ');
+}
+
+static const char* weatherWord(int code, DateLang lang) {
+  // WMO codes: 0 clear, 1 mainly clear, 2-3 cloudy, 45/48 fog, 51-67 drizzle and rain,
+  // 71-77 snow, 80-82 showers, 85-86 snow showers, 95-99 thunderstorm.
+  enum { Clear, Cloud, Fog, Rain, Snow, Storm, None } w = None;
+  if (code == 0 || code == 1) w = Clear;
+  else if (code == 2 || code == 3) w = Cloud;
+  else if (code == 45 || code == 48) w = Fog;
+  else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) w = Rain;
+  else if ((code >= 71 && code <= 77) || code == 85 || code == 86) w = Snow;
+  else if (code >= 95 && code <= 99) w = Storm;
+  static const char* const EN[] = {"CLEAR", "CLOUD", "FOG", "RAIN", "SNOW", "STORM"};
+  static const char* const PT[] = {"LIMPO", "NUVEM", "NEVOA", "CHUVA", "NEVE", "TROVOADA"};
+  return w == None ? nullptr : (lang == DateLang::Pt ? PT : EN)[w];
+}
+
+std::string composeWeather(int32_t tempTenths, int code, bool fahrenheit, DateLang lang, uint8_t units) {
+  int32_t deg = tempTenths >= 0 ? (tempTenths + 5) / 10 : -((-tempTenths + 5) / 10);
+  std::string unit = fahrenheit ? "F" : "C";
+  std::string number = std::to_string(deg < 0 ? -deg : deg) + unit;
+  if (deg < 0) {
+    const std::string forms[] = {std::string(lang == DateLang::Pt ? "MENOS " : "MINUS ") + number, "M" + number};
+    return firstThatFits(forms, 2, units);
+  }
+  const char* word = weatherWord(code, lang);
+  const std::string forms[] = {word ? std::string(word) + " " + number : number, number};
+  return firstThatFits(forms, 2, units);
+}
+
+std::string composeCountdown(const std::string& labelUtf8, int64_t secondsLeft, uint8_t units) {
+  if (secondsLeft <= 0) return std::string(units, ' ');
+  std::string full, brief;
+  if (secondsLeft >= 2 * 86400) {
+    int64_t d = secondsLeft / 86400, h = (secondsLeft % 86400) / 3600;
+    full = std::to_string(d) + "D" + (h ? std::to_string(h) + "H" : "");
+    brief = std::to_string(d) + "D";
+  } else if (secondsLeft >= 3600) {
+    int64_t h = secondsLeft / 3600, m = (secondsLeft % 3600) / 60;
+    char mm[4];
+    snprintf(mm, sizeof mm, "%02d", (int)m);
+    full = std::to_string(h) + "H" + mm + "M";
+    brief = std::to_string(h) + "H";
+  } else {
+    full = brief = std::to_string((secondsLeft + 59) / 60) + "M";
+  }
+  std::string label(labelUtf8.size() + 1, '\0');
+  label.resize(foldToFlaps(labelUtf8.c_str(), &label[0], label.size()));
+  size_t a = label.find_first_not_of(' ');
+  label = a == std::string::npos ? "" : label.substr(a, label.find_last_not_of(' ') - a + 1);
+  // a brief time with the label beats a full time without it: the label says what is coming
+  std::string forms[] = {label + " " + full, label + " " + brief, full, brief};
+  if (label.empty()) forms[0] = forms[1] = "";
+  return firstFlapsThatFit(forms, 4, units);
 }
 
 std::string frameToUtf8(const std::string& frame) {

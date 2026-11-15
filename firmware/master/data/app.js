@@ -11,10 +11,12 @@ const MODES = [
   ["text", "Message", "The text below"],
   ["clock", "Clock", "The time"],
   ["date", "Date", "Day and month"],
+  ["weather", "Weather", "Temperature outside"],
+  ["countdown", "Countdown", "Time left"],
   ["mix", "Mix", "Your rotation"],
   ["off", "Blank", "All flaps blank"],
 ];
-const MIX_NAMES = { followers: "Followers", random: "Random word", text: "Message", clock: "Clock", date: "Date" };
+const MIX_NAMES = { followers: "Followers", random: "Random word", text: "Message", clock: "Clock", date: "Date", weather: "Weather", countdown: "Countdown" };
 const ZONES = [
   ["UTC", "UTC0"],
   ["Lisbon", "WET0WEST,M3.5.0/1,M10.5.0"],
@@ -210,6 +212,87 @@ function renderDevice() {
   $("#device").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", { textContent: k }), el("dd", { textContent: v })]));
 }
 
+// ---- connecting each platform: the steps for its free developer app, then one button ----
+const CONNECT = {
+  instagram: {
+    id: "Instagram app ID", secret: "Instagram app secret",
+    steps: [
+      'You need an Instagram <b>Professional</b> account (Business or Creator): Instagram → Settings → Account type.',
+      'At <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a>, create an app, add the <b>Instagram</b> product and choose <b>API setup with Instagram login</b>.',
+      'Under <b>App roles → Roles</b>, add your Instagram account as an <b>Instagram Tester</b>, then accept the invite in Instagram (Settings → Apps and websites → Tester invites).',
+      'In <b>Business login settings</b>, add the redirect address below as an OAuth redirect URI.',
+      'Copy the <b>Instagram app ID</b> and <b>Instagram app secret</b> into the fields below, save, then press Connect.',
+    ],
+  },
+  facebook: {
+    id: "App ID", secret: "App secret",
+    steps: [
+      'The count comes from a Facebook <b>Page</b> you manage. Personal profiles have no follower count in the API.',
+      'At <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a>, use the same or another app and add <b>Facebook Login</b>.',
+      'In Facebook Login’s settings, add the redirect address below to <b>Valid OAuth redirect URIs</b>.',
+      'Copy the <b>App ID</b> and <b>App secret</b> from <b>App settings → Basic</b> into the fields below, save, then press Connect.',
+      'When Facebook asks, allow <b>pages_show_list</b> and <b>pages_read_engagement</b> and select your Page.',
+    ],
+  },
+  tiktok: {
+    id: "Client key", secret: "Client secret",
+    steps: [
+      'At <a href="https://developers.tiktok.com" target="_blank" rel="noopener">developers.tiktok.com</a>, create an app and add <b>Login Kit</b> for the <b>Web</b>.',
+      'Add the redirect address below as a redirect URI.',
+      'Add the scopes <b>user.info.basic</b> and <b>user.info.stats</b> (the follower count is in the second).',
+      'Under <b>Sandbox</b>, add your TikTok account as a target user.',
+      'Copy the <b>Client key</b> and <b>Client secret</b> into the fields below, save, then press Connect. If TikTok won’t grant the follower count without an app review, set the count to “A number I type” instead.',
+    ],
+  },
+};
+let integrations = null;
+
+function connectSection(id, name) {
+  const c = CONNECT[id];
+  return `
+    <details class="connect">
+      <summary>Connect ${name}</summary>
+      <ol class="steps">${c.steps.map((t) => `<li>${t}</li>`).join("")}</ol>
+      <div class="connect-server">
+        <label>Redirect address
+          <span class="inline"><input class="redirect token" readonly aria-label="Redirect address for ${name}"><button type="button" class="quiet copy">Copy</button></span></label>
+        <form class="app-creds">
+          <label>${c.id} <input name="app_id" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+          <label>${c.secret} <input name="app_secret" type="password" autocomplete="off" placeholder="not set"></label>
+          <button type="submit" class="quiet wide">Save</button>
+        </form>
+        <a class="button connect-go" href="/oauth/${id}/start">Connect ${name}</a>
+        <p class="hint last"></p>
+      </div>
+      <p class="hint connect-local">Connecting needs the app server, which gives ${name} a secure address to come back to. Without it, run <code>python -m auth ${id}</code> from <code>tools/</code> on a PC, or paste a token below.</p>
+    </details>`;
+}
+
+function renderIntegrations() {
+  for (const [id, name] of PLATFORMS) {
+    const card = $(`#p-${id}`), info = integrations && integrations[id];
+    card.querySelector(".connect-server").hidden = !viaServer;
+    card.querySelector(".connect-local").hidden = viaServer;
+    if (!info) continue;
+    card.querySelector(".redirect").value = info.redirect_uri;
+    const f = card.querySelector(".app-creds").elements;
+    if (f.app_id !== document.activeElement) f.app_id.value = info.app_id;
+    f.app_secret.placeholder = info.secret_set ? "saved (leave empty to keep)" : "not set";
+    const go = card.querySelector(".connect-go"), ready = info.app_id && info.secret_set;
+    go.classList.toggle("disabled", !ready);
+    go.setAttribute("aria-disabled", !ready);
+    const last = card.querySelector(".last"), l = info.last;
+    if (!l) { last.textContent = ready ? "" : "Save the app's ID and secret first."; last.className = "hint last"; continue; }
+    last.textContent = l.ok
+      ? `Connected ${l.account || name}${l.followers != null ? `, ${fmtCount(l.followers)} followers` : ""} · ${ago(l.at)}${l.message ? `. ${l.message}` : ""}`
+      : `Didn’t connect: ${l.message}`;
+    last.className = "hint last " + (l.ok ? "ok" : "bad");
+  }
+}
+async function loadIntegrations() {
+  try { integrations = await api("/api/integrations"); renderIntegrations(); } catch (e) { /* shown by refresh */ }
+}
+
 // ---- followers ----
 function buildPlatforms() {
   $("#platforms").replaceChildren(...PLATFORMS.map(([id, name]) => {
@@ -222,7 +305,24 @@ function buildPlatforms() {
           <select id="src-${id}" data-p="source"><option value="api">${name} (automatic)</option><option value="manual">A number I type</option></select></div>
         <div class="field" data-manual><label for="man-${id}">Followers</label>
           <input id="man-${id}" type="number" inputmode="numeric" min="0" data-p="manual_count"></div>
-      </div>`;
+      </div>${connectSection(id, name)}`;
+    card.querySelector(".copy").addEventListener("click", async () => {
+      const v = card.querySelector(".redirect");
+      try { await navigator.clipboard.writeText(v.value); toast("Copied"); } catch (e) { v.select(); }
+    });
+    card.querySelector(".app-creds").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = ev.target.elements;
+      try {
+        await api("/api/integrations", { platform: id, app_id: f.app_id.value.trim(), app_secret: f.app_secret.value.trim() });
+        f.app_secret.value = "";
+        toast("Saved. Now press Connect.");
+        loadIntegrations();
+      } catch (e) { toast(e.message, true); }
+    });
+    card.querySelector(".connect-go").addEventListener("click", (ev) => {
+      if (ev.currentTarget.classList.contains("disabled")) { ev.preventDefault(); toast("Save the app's ID and secret first.", true); }
+    });
     card.addEventListener("change", (ev) => {
       const key = ev.target.dataset.p;
       if (!key || !cfg) return;
@@ -253,7 +353,7 @@ function renderPlatforms() {
     else if (p.status === "ok") { text = `Updated ${p.last_ok ? ago(p.last_ok) : "just now"}`; cls = "ok"; }
     else if (p.status === "rate_limited") { text = "Rate limited: trying again later"; cls = "warn"; }
     else if (p.token && p.token.needs_reauth) { text = "Sign-in expired: send new tokens"; cls = "bad"; }
-    else if (p.token && !p.token.access) { text = "No token yet: see Tokens below"; cls = "warn"; }
+    else if (p.token && !p.token.access) { text = viaServer ? "Not connected yet: open Connect below" : "No token yet: see below"; cls = "warn"; }
     else { text = p.error || "Not fetched yet"; cls = "bad"; }
     state.textContent = text;
     state.className = `state ${cls}`;
@@ -366,6 +466,71 @@ $("#preset-save").addEventListener("click", () => {
   save({ presets: [...list, text] }, "Message saved");
 });
 
+// ---- countdown ----
+const cdForm = $("#countdown-form");
+function syncCountdownFields() {
+  const once = cdForm.elements.repeat.value === "once";
+  cdForm.querySelectorAll("[data-cd]").forEach((l) => { l.hidden = l.dataset.cd !== (once ? "once" : "daily"); });
+}
+cdForm.elements.repeat.addEventListener("change", syncCountdownFields);
+function renderCountdown() {
+  const f = cdForm.elements, at = cfg.countdown_at || "";
+  if (cdForm.contains(document.activeElement)) return;
+  f.label.value = cfg.countdown_label || "";
+  f.done.value = cfg.countdown_done || "";
+  if (at.includes("T")) { f.repeat.value = "once"; f.when.value = at; } else { f.repeat.value = "daily"; f.time.value = at; }
+  syncCountdownFields();
+}
+cdForm.elements.label.addEventListener("input", () => {
+  const e = explain(cdForm.elements.label.value);
+  $("#countdown-hint").textContent = e || "Shows the label and the time left, such as CLOSE 25M or XMAS 12D. Choose Countdown above, or add it to the Mix.";
+});
+cdForm.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const f = cdForm.elements, once = f.repeat.value === "once";
+  const at = once ? f.when.value.slice(0, 16) : f.time.value;
+  if (!at) return toast(once ? "Choose the date and time." : "Choose the time.", true);
+  save({ countdown_label: f.label.value.trim(), countdown_at: at, countdown_done: once ? f.done.value.trim() : "" }, "Countdown saved");
+});
+$("#countdown-go").addEventListener("click", () => {
+  if (!cfg || !cfg.countdown_at) return toast("Save a time or date first.", true);
+  save({ mode: "countdown" }, "Showing the countdown");
+});
+
+// ---- weather ----
+const wForm = $("#weather-form");
+function renderWeather() {
+  const f = wForm.elements;
+  if (!wForm.contains(document.activeElement)) {
+    f.lat.value = cfg.weather_lat === "" ? "" : cfg.weather_lat;
+    f.lon.value = cfg.weather_lon === "" ? "" : cfg.weather_lon;
+    f.unit.value = cfg.weather_unit || "c";
+  }
+  const w = status && status.weather, line = $("#weather-state");
+  if (cfg.weather_lat === "") line.textContent = "No location yet: the Weather mode stays blank.";
+  else if (w && w.temp != null) line.textContent = `Now ${Math.round(w.temp)}°${(w.unit || "c").toUpperCase()}, updated ${w.last_ok ? ago(w.last_ok) : "just now"}.`;
+  else if (w && !w.wanted) line.textContent = "The display fetches the weather while Weather is the mode or in the Mix.";
+  else if (w && w.error) line.textContent = `Not fetched yet: ${w.error}`;
+  else line.textContent = "";
+}
+$("#w-here").hidden = !(window.isSecureContext && navigator.geolocation);
+$("#w-here").addEventListener("click", () => {
+  navigator.geolocation.getCurrentPosition((pos) => {
+    wForm.elements.lat.value = pos.coords.latitude.toFixed(4);
+    wForm.elements.lon.value = pos.coords.longitude.toFixed(4);
+    toast("Location filled in. Press Save.");
+  }, (err) => toast(`Couldn't get the location: ${err.message}`, true), { timeout: 15000 });
+});
+wForm.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const f = wForm.elements, lat = Number(f.lat.value.replace(",", ".")), lon = Number(f.lon.value.replace(",", "."));
+  if (!f.lat.value.trim() || !f.lon.value.trim() || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return toast("Enter a latitude from -90 to 90 and a longitude from -180 to 180.", true);
+  }
+  save({ weather_lat: lat, weather_lon: lon, weather_unit: f.unit.value }, "Weather location saved");
+});
+$("#w-off").addEventListener("click", () => save({ weather_lat: "", weather_lon: "" }, "Weather switched off"));
+
 // ---- Words tab ----
 function renderWords() {
   const list = cfg.words || [];
@@ -447,6 +612,8 @@ function render() {
   renderPresets();
   renderWords();
   renderMix();
+  renderCountdown();
+  renderWeather();
   renderPlatforms();
   if (!viaServer) {
     const f = $("#remote-form").elements;
@@ -502,16 +669,23 @@ $("#remote-form").addEventListener("submit", (ev) => {
   save(patch, patch.remote_url ? "Saved. The display connects within a few seconds." : "App server switched off");
 });
 
-// ---- on the server only: its name, time zone, account and the device token ----
-let server = null;
+// ---- on the server only: its name, time zone, your account, people and the device token ----
+let server = null, meInfo = null;
+function renderAccount() {
+  if (!meInfo) return;
+  const a = $("#account-form").elements;
+  if (document.activeElement !== a.username) a.username.value = meInfo.username;
+  $("#account-env").hidden = !meInfo.env;
+  for (const f of a) f.disabled = meInfo.env;
+}
+async function loadMe() {
+  try { meInfo = await api("/api/me"); renderAccount(); } catch (e) { /* shown by refresh */ }
+}
 function renderServer() {
   if (!server) return;
-  const s = $("#server-form").elements, a = $("#account-form").elements;
+  const s = $("#server-form").elements;
   if (document.activeElement !== s.display_name) s.display_name.value = server.display_name;
   if (document.activeElement !== s.time_zone) s.time_zone.value = server.time_zone;
-  if (document.activeElement !== a.username) a.username.value = server.username;
-  $("#account-env").hidden = !server.password_from_env;
-  for (const f of a) f.disabled = server.password_from_env;
   $("#dtoken-state").textContent = server.device_token_from_env ? "The device token is set by the DEVICE_TOKEN variable on the server."
     : server.device_token_set ? "A device token is set. Making a new one disconnects the display until you enter the new one there."
     : "No device token yet. Make one, then enter it on the display.";
@@ -520,6 +694,65 @@ function renderServer() {
 async function loadServer() {
   try { server = await api("/api/server"); renderServer(); } catch (e) { /* shown by refresh */ }
 }
+
+async function loadUsers() {
+  let list;
+  try { list = (await api("/api/users")).users; } catch (e) { return; }
+  $("#users").replaceChildren(...list.map((u) => {
+    const name = el("span", { className: "grow", textContent: u.username });
+    name.append(el("small", { textContent: u.env ? "admin · set by APP_PASSWORD" : u.you ? `${u.role} · you` : u.role }));
+    const li = el("li", { className: "user" }, name);
+    if (u.env) return li;
+    const role = el("select", {}, el("option", { value: "staff", textContent: "Staff" }), el("option", { value: "admin", textContent: "Admin" }));
+    role.value = u.role;
+    role.setAttribute("aria-label", `Role of ${u.username}`);
+    role.addEventListener("change", async () => {
+      try { await api(`/api/users/${encodeURIComponent(u.username)}`, { role: role.value }); toast(`${u.username} is now ${role.value}`); }
+      catch (e) { toast(e.message, true); }
+      loadUsers();
+      refresh();
+    });
+    const reset = el("button", { type: "button", className: "quiet", textContent: "New password" });
+    const remove = el("button", { type: "button", className: "icon remove", textContent: "×" });
+    remove.setAttribute("aria-label", `Remove ${u.username}`);
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Remove ${u.username}? They are signed out straight away.`)) return;
+      try {
+        const res = await fetch(`/api/users/${encodeURIComponent(u.username)}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        toast(`Removed ${u.username}`);
+      } catch (e) { toast(e.message, true); }
+      loadUsers();
+    });
+    const pw = el("form", { className: "inline user-pw", hidden: true },
+      el("input", { type: "password", name: "password", minLength: 12, autocomplete: "new-password", placeholder: "New password, 12+ characters" }),
+      el("button", { type: "submit", textContent: "Set" }));
+    reset.addEventListener("click", () => { pw.hidden = !pw.hidden; if (!pw.hidden) pw.elements.password.focus(); });
+    pw.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try {
+        await api(`/api/users/${encodeURIComponent(u.username)}`, { password: pw.elements.password.value });
+        toast(`New password set. ${u.username} has to sign in again.`);
+        pw.hidden = true;
+        pw.reset();
+      } catch (e) { toast(e.message, true); }
+    });
+    if (u.you) li.append(role);  // your own password: under Your account; removing yourself would lock you out
+    else li.append(role, reset, remove, pw);
+    return li;
+  }));
+}
+$("#user-add").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  try {
+    await api("/api/users", { username: f.username.value.trim(), password: f.password.value, role: f.role.value });
+    toast(`Added ${f.username.value.trim()}`);
+    ev.target.reset();
+    loadUsers();
+  } catch (e) { toast(e.message, true); }
+});
 function nameBoard(s) {
   const name = (viaServer && s.server && s.server.name) || "Split-Flap";
   $(".board-top h1").textContent = name;
@@ -540,10 +773,10 @@ $("#account-form").addEventListener("submit", async (ev) => {
   const f = ev.target.elements, body = { username: f.username.value.trim(), current_password: f.current_password.value };
   if (f.new_password.value) body.new_password = f.new_password.value;
   try {
-    server = await api("/api/server", body);
+    meInfo = await api("/api/me", body);
     f.current_password.value = f.new_password.value = "";
-    renderServer();
-    toast(server.signed_out_others ? "Saved. Other phones need to sign in again." : "Saved");
+    renderAccount();
+    toast(meInfo.signed_out_others ? "Saved. Your other phones need to sign in again." : "Saved");
   } catch (e) { toast(e.message, true); }
 });
 $("#dtoken-form").addEventListener("submit", async (ev) => {
@@ -599,10 +832,16 @@ async function refresh() {
     $("#local-only").hidden = viaServer;
     $("#logout").hidden = !viaServer;
     $("#server-only").hidden = !viaServer;
+    const role = viaServer && status.me ? status.me.role : "admin";
+    if (document.body.dataset.role !== role) {
+      document.body.dataset.role = role;
+      if (role === "staff" && ["followers"].includes(store.get("tab"))) openTab("now");
+      if (viaServer && role === "admin") { loadServer(); loadUsers(); loadIntegrations(); }
+    }
     nameBoard(status);
     renderStatus();
-    if (!cfg || wasServer !== viaServer) loadConfig();
-    if (viaServer && !server) loadServer();
+    if (!cfg || wasServer !== viaServer) { loadConfig(); renderIntegrations(); }
+    if (viaServer && !meInfo) loadMe();
   } catch (e) {
     if (++failures >= 2) {
       $("#link").textContent = viaServer ? "Can't reach the server" : "Can't reach the display";
@@ -626,6 +865,20 @@ $("#timezone").replaceChildren(...ZONES.map(([name, tz]) => el("option", { value
 buildModes();
 buildPlatforms();
 openTab(store.get("tab") || "now");
+{
+  const back = new URLSearchParams(location.search).get("connected");
+  if (back) {
+    history.replaceState(null, "", "/");
+    openTab("followers");
+    api("/api/integrations").then((info) => {
+      integrations = info;
+      renderIntegrations();
+      const l = info[back] && info[back].last, card = $(`#p-${back}`);
+      if (card) { card.querySelector("details.connect").open = true; card.scrollIntoView({ block: "start" }); }
+      if (l) toast(l.ok ? `Connected ${l.account || back}` : `Didn’t connect: ${l.message}`, !l.ok);
+    }).catch(() => {});
+  }
+}
 refresh();
 
 // Home-screen install and a cached shell. Needs HTTPS, so it is active on the relay server only.

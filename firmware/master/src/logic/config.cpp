@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char* const MODE_NAMES[DISPLAY_MODE_COUNT] = {"cycle", "single", "text", "off", "random", "clock", "date", "mix"};
-static const char* const MIX_NAMES[MIX_KIND_COUNT] = {"followers", "random", "text", "clock", "date"};
+static const char* const MODE_NAMES[DISPLAY_MODE_COUNT] = {"cycle", "single", "text", "off", "random", "clock", "date", "mix", "weather", "countdown"};
+static const char* const MIX_NAMES[MIX_KIND_COUNT] = {"followers", "random", "text", "clock", "date", "weather", "countdown"};
 static const char* const ALIGN_NAMES[] = {"left", "center", "right"};
 
 bool parsePlatform(const std::string& id, Platform& out) {
@@ -86,6 +86,17 @@ std::string configToJson(const Config& c, bool includeSecrets, bool includeLists
   }
   doc["clock_24h"] = c.clock24h;
   doc["date_lang"] = c.dateLang == DateLang::Pt ? "pt" : "en";
+  if (c.weatherSet) {
+    doc["weather_lat"] = c.weatherLat;
+    doc["weather_lon"] = c.weatherLon;
+  } else {
+    doc["weather_lat"] = "";
+    doc["weather_lon"] = "";
+  }
+  doc["weather_unit"] = c.weatherFahrenheit ? "f" : "c";
+  doc["countdown_label"] = c.countdownLabel;
+  doc["countdown_at"] = c.countdownAt;
+  doc["countdown_done"] = c.countdownDone;
   if (includeLists) {
     addList(doc, "words", c.words);
     addList(doc, "presets", c.presets);
@@ -215,7 +226,7 @@ std::string applyConfigJson(Config& live, const std::string& json) {
         found = true;
       }
     }
-    if (!found) return "mode must be cycle, single, text, off, random, clock, date or mix";
+    if (!found) return "mode must be cycle, single, text, off, random, clock, date, mix, weather or countdown";
   }
   if (!doc["single"].isNull() && !parsePlatform(doc["single"] | "", c.single)) return "unknown platform in single";
   if (!doc["text"].isNull()) {
@@ -261,7 +272,7 @@ std::string applyConfigJson(Config& live, const std::string& json) {
           found = true;
         }
       }
-      if (!found) return "mix kind must be followers, random, text, clock or date";
+      if (!found) return "mix kind must be followers, random, text, clock, date, weather or countdown";
       if (!readInt(v["seconds"], MIN_CYCLE_SECONDS, 3600, item.seconds, err, "mix seconds")) return err;
       mix.push_back(item);
     }
@@ -277,6 +288,44 @@ std::string applyConfigJson(Config& live, const std::string& json) {
     if (l == "en") c.dateLang = DateLang::En;
     else if (l == "pt") c.dateLang = DateLang::Pt;
     else return "date_lang must be en or pt";
+  }
+  // Weather location: two numbers, or "" in both to switch the weather off.
+  if (!doc["weather_lat"].isNull() || !doc["weather_lon"].isNull()) {
+    JsonVariantConst la = doc["weather_lat"], lo = doc["weather_lon"];
+    bool clearLat = la.is<const char*>() && !*la.as<const char*>();
+    bool clearLon = lo.is<const char*>() && !*lo.as<const char*>();
+    if (clearLat && clearLon) {
+      c.weatherSet = false;
+    } else {
+      if (!la.is<double>() || !lo.is<double>()) return "weather_lat and weather_lon must both be numbers, or both empty";
+      double lat = la.as<double>(), lon = lo.as<double>();
+      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return "weather_lat must be -90..90 and weather_lon -180..180";
+      c.weatherSet = true;
+      c.weatherLat = lat;
+      c.weatherLon = lon;
+    }
+  }
+  if (!doc["weather_unit"].isNull()) {
+    std::string u = doc["weather_unit"] | "";
+    if (u == "c") c.weatherFahrenheit = false;
+    else if (u == "f") c.weatherFahrenheit = true;
+    else return "weather_unit must be c or f";
+  }
+  if (!doc["countdown_label"].isNull()) {
+    std::string t = doc["countdown_label"] | "";
+    if (t.size() > MAX_WORD_BYTES) return "countdown_label too long";
+    c.countdownLabel = t;
+  }
+  if (!doc["countdown_done"].isNull()) {
+    std::string t = doc["countdown_done"] | "";
+    if (t.size() > MAX_TEXT_BYTES) return "countdown_done too long";
+    c.countdownDone = t;
+  }
+  if (!doc["countdown_at"].isNull()) {
+    std::string t = doc["countdown_at"] | "";
+    CountdownTarget target;
+    if (!t.empty() && !parseCountdownAt(t, target)) return "countdown_at must be YYYY-MM-DDTHH:MM or HH:MM";
+    c.countdownAt = t;
   }
   if (!doc["remote_url"].isNull()) {
     std::string u = doc["remote_url"] | "";
@@ -325,4 +374,51 @@ std::string parseTokenUpdate(const std::string& json, TokenUpdate& out) {
   }
   out = t;
   return "";
+}
+
+bool parseCountdownAt(const std::string& s, CountdownTarget& out) {
+  unsigned y, mo, d, h, mi;
+  char extra;
+  CountdownTarget t;
+  if (sscanf(s.c_str(), "%4u-%2u-%2uT%2u:%2u%c", &y, &mo, &d, &h, &mi, &extra) == 5 && s.size() == 16) {
+    static const uint8_t DAYS[] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (y < 2000 || y > 2099 || mo < 1 || mo > 12 || d < 1 || d > DAYS[mo - 1] || h > 23 || mi > 59) return false;
+    bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    if (mo == 2 && d == 29 && !leap) return false;
+    t.daily = false;
+    t.year = (uint16_t)y;
+    t.month = (uint8_t)mo;
+    t.day = (uint8_t)d;
+  } else if (sscanf(s.c_str(), "%2u:%2u%c", &h, &mi, &extra) == 2 && s.size() == 5) {
+    if (h > 23 || mi > 59) return false;
+    t.daily = true;
+  } else {
+    return false;
+  }
+  t.hour = (uint8_t)h;
+  t.minute = (uint8_t)mi;
+  out = t;
+  return true;
+}
+
+// Days from 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+static int64_t daysFromCivil(int64_t y, unsigned m, unsigned d) {
+  y -= m <= 2;
+  const int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + (int64_t)doe - 719468;
+}
+
+int64_t secondsUntil(const CountdownTarget& t, uint16_t year, uint8_t month, uint8_t day, uint8_t hour,
+                     uint8_t minute, uint8_t second) {
+  int64_t now = daysFromCivil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second;
+  if (t.daily) {
+    int64_t today = daysFromCivil(year, month, day) * 86400 + t.hour * 3600 + t.minute * 60;
+    if (today <= now) today += 86400;  // already passed today: tomorrow's
+    return today - now;
+  }
+  int64_t target = daysFromCivil(t.year, t.month, t.day) * 86400 + t.hour * 3600 + t.minute * 60;
+  return target - now;
 }

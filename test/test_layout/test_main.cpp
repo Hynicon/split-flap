@@ -168,6 +168,36 @@ void test_date() {
   eq("         ", composeDate(13, 13, DateLang::En, 9));
 }
 
+void test_weather() {
+  TEST_ASSERT_EQUAL_STRING("CLOUD 18C", composeWeather(184, 3, false, DateLang::En, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("CHUVA 12C", composeWeather(116, 61, false, DateLang::Pt, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("CLEAR 64F", composeWeather(644, 0, true, DateLang::En, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("   18C   ", composeWeather(175, 99, false, DateLang::Pt, 9).c_str());  // TROVOADA doesn't fit
+  TEST_ASSERT_EQUAL_STRING("   18C   ", composeWeather(180, -1, false, DateLang::En, 9).c_str());  // no code
+  TEST_ASSERT_EQUAL_STRING("  18C  ", composeWeather(184, 3, false, DateLang::En, 7).c_str());
+  TEST_ASSERT_EQUAL_STRING("MINUS 3C ", composeWeather(-26, 71, false, DateLang::En, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("MENOS 3C ", composeWeather(-26, 71, false, DateLang::Pt, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING(" M3C ", composeWeather(-26, 71, false, DateLang::En, 5).c_str());
+  TEST_ASSERT_EQUAL_STRING(" 0C  ", composeWeather(-4, 0, false, DateLang::En, 5).c_str());  // rounds to 0, not "minus 0"
+  TEST_ASSERT_EQUAL_STRING("CLEAR 0C ", composeWeather(-4, 0, false, DateLang::En, 9).c_str());
+}
+
+void test_countdown() {
+  TEST_ASSERT_EQUAL_STRING("XMAS 12D ", composeCountdown("Xmas", 12 * 86400 + 5 * 3600, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("XMAS 2D5H", composeCountdown("xmas", 2 * 86400 + 5 * 3600 + 7, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("CLOSE 2H ", composeCountdown("close", 2 * 3600 + 5 * 60, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("GO 2H05M ", composeCountdown("go", 2 * 3600 + 5 * 60, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("CLOSE 25M", composeCountdown("close", 24 * 60 + 1, 9).c_str());  // rounded up
+  TEST_ASSERT_EQUAL_STRING("CLOSE 1M ", composeCountdown("close", 5, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("  25M  ", composeCountdown("closing", 25 * 60, 7).c_str());  // label doesn't fit
+  TEST_ASSERT_EQUAL_STRING("   12D   ", composeCountdown("", 12 * 86400, 9).c_str());
+  TEST_ASSERT_EQUAL_STRING("NATAL 3D ", composeCountdown("  Natal  ", 3 * 86400 + 600, 9).c_str());
+  std::string agua = composeCountdown("\xC3\xA1gua", 25 * 60, 9);  // accented flap counts once
+  TEST_ASSERT_EQUAL_UINT(9, agua.size());
+  TEST_ASSERT_EQUAL_STRING("GUA 25M ", agua.substr(1).c_str());
+  TEST_ASSERT_EQUAL_STRING("         ", composeCountdown("x", 0, 9).c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_clock);
@@ -204,5 +234,7 @@ int main(int, char**) {
   RUN_TEST(test_fold_portuguese);
   RUN_TEST(test_fold_bounds_and_invalid);
   RUN_TEST(test_frame_to_utf8);
+  RUN_TEST(test_weather);
+  RUN_TEST(test_countdown);
   return UNITY_END();
 }

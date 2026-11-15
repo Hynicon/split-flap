@@ -74,6 +74,8 @@ Scene Rotation::mixScene(const Config& c) const {
     case MixKind::Text: s.kind = SceneKind::Text; break;
     case MixKind::Clock: s.kind = SceneKind::Clock; break;
     case MixKind::Date: s.kind = SceneKind::Date; break;
+    case MixKind::Weather: s.kind = SceneKind::Weather; break;
+    case MixKind::Countdown: s.kind = SceneKind::Countdown; break;
   }
   return s;
 }
@@ -103,6 +105,12 @@ Scene Rotation::update(const Config& c, uint32_t nowMs) {
       return s;
     case DisplayMode::Date:
       s.kind = SceneKind::Date;
+      return s;
+    case DisplayMode::Weather:
+      s.kind = SceneKind::Weather;
+      return s;
+    case DisplayMode::Countdown:
+      s.kind = SceneKind::Countdown;
       return s;
     case DisplayMode::Single:
       s.kind = SceneKind::Followers;

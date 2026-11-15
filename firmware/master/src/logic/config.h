@@ -10,10 +10,10 @@
 #include "display/layout.h"
 
 // Cycle: each enabled platform in turn. Random: a word from `words`. Mix: the `mix` list in order.
-enum class DisplayMode : uint8_t { Cycle, Single, Text, Off, Random, Clock, Date, Mix };
-constexpr uint8_t DISPLAY_MODE_COUNT = 8;
-enum class MixKind : uint8_t { Followers, Random, Text, Clock, Date };
-constexpr uint8_t MIX_KIND_COUNT = 5;
+enum class DisplayMode : uint8_t { Cycle, Single, Text, Off, Random, Clock, Date, Mix, Weather, Countdown };
+constexpr uint8_t DISPLAY_MODE_COUNT = 10;
+enum class MixKind : uint8_t { Followers, Random, Text, Clock, Date, Weather, Countdown };
+constexpr uint8_t MIX_KIND_COUNT = 7;
 
 // One entry of the mixed rotation. A Followers entry shows every enabled platform for `seconds` each.
 struct MixItem {
@@ -46,6 +46,14 @@ struct Config {
   bool clock24h = true;
   DateLang dateLang = DateLang::En;
   std::vector<std::string> presets;  // saved messages for the app's quick-send buttons
+  // Weather (Open-Meteo): no location means off.
+  bool weatherSet = false;
+  double weatherLat = 0, weatherLon = 0;
+  bool weatherFahrenheit = false;
+  // Countdown: "YYYY-MM-DDTHH:MM" (once) or "HH:MM" (every day), in local time; empty means off.
+  std::string countdownLabel;
+  std::string countdownAt;
+  std::string countdownDone;  // shown once a one-off countdown has run out
   std::string remoteUrl;    // relay server, e.g. "https://flap.example.com"; empty = no relay
   std::string remoteToken;  // device token for the relay; never returned by GET /api/config
   std::string adminKey;  // required on every POST; never returned by GET /api/config
@@ -78,3 +86,16 @@ struct TokenUpdate {
 std::string parseTokenUpdate(const std::string& json, TokenUpdate& out);
 
 bool parsePlatform(const std::string& id, Platform& out);
+
+// countdown_at, parsed. daily: year/month/day unused.
+struct CountdownTarget {
+  bool daily = true;
+  uint16_t year = 0;
+  uint8_t month = 0, day = 0, hour = 0, minute = 0;
+};
+bool parseCountdownAt(const std::string& s, CountdownTarget& out);
+// Seconds from the given local time to the target (local calendar arithmetic, so a DST change in
+// between shifts it by up to an hour). Negative once a one-off target has passed; a daily target
+// that has passed today counts to tomorrow's.
+int64_t secondsUntil(const CountdownTarget& t, uint16_t year, uint8_t month, uint8_t day, uint8_t hour,
+                     uint8_t minute, uint8_t second);

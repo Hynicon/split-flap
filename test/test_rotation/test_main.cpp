@@ -197,6 +197,20 @@ void test_mode_change_restarts() {
   TEST_ASSERT_TRUE(r.update(c, 22000).kind == SceneKind::Clock);  // from the first entry again
 }
 
+void test_weather_and_countdown_scenes() {
+  Rotation r(rng);
+  Config c;
+  c.mode = DisplayMode::Weather;
+  TEST_ASSERT_TRUE(r.update(c, 0).kind == SceneKind::Weather);
+  c.mode = DisplayMode::Countdown;
+  TEST_ASSERT_TRUE(r.update(c, 10).kind == SceneKind::Countdown);
+  c.mode = DisplayMode::Mix;
+  c.mix = {{MixKind::Weather, 30}, {MixKind::Countdown, 30}};
+  TEST_ASSERT_TRUE(r.update(c, 20).kind == SceneKind::Weather);
+  TEST_ASSERT_TRUE(r.update(c, 20 + 30000).kind == SceneKind::Countdown);
+  TEST_ASSERT_TRUE(r.update(c, 20 + 60000).kind == SceneKind::Weather);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_simple_modes);
@@ -211,5 +225,6 @@ int main(int, char**) {
   RUN_TEST(test_mix_skips_entries_with_nothing_to_show);
   RUN_TEST(test_mix_single_random_entry_keeps_changing);
   RUN_TEST(test_mode_change_restarts);
+  RUN_TEST(test_weather_and_countdown_scenes);
   return UNITY_END();
 }
