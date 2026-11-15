@@ -1,5 +1,8 @@
 # Split-Flap Social Follower Counter
 
+> [!WARNING]
+> **Work in progress.** This project is for testing and is not complete. The firmware, the phone app, the relay server and the electronics tray have not yet been tested together on a finished display, and things may change. Build it at your own risk.
+
 A mechanical split-flap display with 9 units. It shows your **TikTok, Instagram and Facebook** follower counts and cycles between them:
 
 ```
