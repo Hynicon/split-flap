@@ -216,6 +216,39 @@
         </div>
       </div>
 
+      <div id="server-only" hidden>
+        <h2>Server</h2>
+        <form id="server-form" class="card">
+          <label>Name shown in the app <input name="display_name" maxlength="40" placeholder="Split-Flap"></label>
+          <label>Time zone for times in the app <input name="time_zone" list="tz-list" autocomplete="off" placeholder="Europe/Lisbon"></label>
+          <datalist id="tz-list"></datalist>
+          <button type="submit">Save</button>
+        </form>
+
+        <h2>Account</h2>
+        <form id="account-form" class="card">
+          <p id="account-env" class="hint" hidden>The account is set by the APP_PASSWORD variable on the server.</p>
+          <label>Username <input name="username" autocomplete="username" autocapitalize="none" maxlength="40" required></label>
+          <label>New password <input name="new_password" type="password" autocomplete="new-password" minlength="12" placeholder="unchanged"></label>
+          <label>Current password <input name="current_password" type="password" autocomplete="current-password" required></label>
+          <p class="hint">A new password signs out every other phone.</p>
+          <button type="submit">Save</button>
+        </form>
+
+        <h2>Device token</h2>
+        <form id="dtoken-form" class="card">
+          <p id="dtoken-state" class="hint"></p>
+          <div id="dtoken-make">
+            <label>Current password <input name="current_password" type="password" autocomplete="current-password" required></label>
+            <button type="submit" class="quiet wide">Make a new device token</button>
+          </div>
+          <div id="dtoken-new" hidden>
+            <p>Copy it now, it won't be shown again. Enter it on the display's own page under <b>Settings → App server</b>. The old token has stopped working.</p>
+            <div class="inline"><input id="dtoken-value" class="token" readonly aria-label="New device token"><button type="button" id="dtoken-copy" class="quiet">Copy</button></div>
+          </div>
+        </form>
+      </div>
+
       <form id="logout" method="post" action="/logout" hidden>
         <button type="submit" class="quiet wide">Sign out</button>
       </form>

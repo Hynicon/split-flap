@@ -8,8 +8,10 @@ services:
       dockerfile: server/Dockerfile
     restart: unless-stopped
     environment:
-      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in server/.env}
-      DEVICE_TOKEN: ${DEVICE_TOKEN:?set DEVICE_TOKEN in server/.env}
+      # Leave these unset to create the account and the device token on the setup page instead.
+      APP_USERNAME: ${APP_USERNAME:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      DEVICE_TOKEN: ${DEVICE_TOKEN:-}
       # Read by nginx-proxy (and by acme-companion, if you use it for certificates):
       VIRTUAL_HOST: ${VIRTUAL_HOST:?set VIRTUAL_HOST in server/.env}
       VIRTUAL_PORT: "8000"

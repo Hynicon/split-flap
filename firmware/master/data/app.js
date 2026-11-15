@@ -149,7 +149,13 @@ const ago = (epoch) => {
   if (s < 129600) return `${Math.round(s / 3600)} h ago`;
   return `${Math.round(s / 86400)} days ago`;
 };
-const fmtTime = (epoch) => (epoch ? new Date(epoch * 1000).toLocaleString() : "never");
+// Times in the server's time zone when it has one (the phone may be elsewhere), else the phone's.
+const fmtTime = (epoch) => {
+  if (!epoch) return "never";
+  const tz = viaServer && status && status.server && status.server.time_zone;
+  try { if (tz) return new Date(epoch * 1000).toLocaleString(undefined, { timeZone: tz }); } catch (e) { /* unknown zone */ }
+  return new Date(epoch * 1000).toLocaleString();
+};
 const fmtCount = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString());
 
 let shownError = 0;
@@ -496,6 +502,67 @@ $("#remote-form").addEventListener("submit", (ev) => {
   save(patch, patch.remote_url ? "Saved. The display connects within a few seconds." : "App server switched off");
 });
 
+// ---- on the server only: its name, time zone, account and the device token ----
+let server = null;
+function renderServer() {
+  if (!server) return;
+  const s = $("#server-form").elements, a = $("#account-form").elements;
+  if (document.activeElement !== s.display_name) s.display_name.value = server.display_name;
+  if (document.activeElement !== s.time_zone) s.time_zone.value = server.time_zone;
+  if (document.activeElement !== a.username) a.username.value = server.username;
+  $("#account-env").hidden = !server.password_from_env;
+  for (const f of a) f.disabled = server.password_from_env;
+  $("#dtoken-state").textContent = server.device_token_from_env ? "The device token is set by the DEVICE_TOKEN variable on the server."
+    : server.device_token_set ? "A device token is set. Making a new one disconnects the display until you enter the new one there."
+    : "No device token yet. Make one, then enter it on the display.";
+  $("#dtoken-make").hidden = server.device_token_from_env;
+}
+async function loadServer() {
+  try { server = await api("/api/server"); renderServer(); } catch (e) { /* shown by refresh */ }
+}
+function nameBoard(s) {
+  const name = (viaServer && s.server && s.server.name) || "Split-Flap";
+  $(".board-top h1").textContent = name;
+  document.title = name;
+}
+$("#server-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  try {
+    server = await api("/api/server", { display_name: f.display_name.value.trim(), time_zone: f.time_zone.value.trim() });
+    renderServer();
+    toast("Saved");
+    refresh();
+  } catch (e) { toast(e.message, true); }
+});
+$("#account-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target.elements, body = { username: f.username.value.trim(), current_password: f.current_password.value };
+  if (f.new_password.value) body.new_password = f.new_password.value;
+  try {
+    server = await api("/api/server", body);
+    f.current_password.value = f.new_password.value = "";
+    renderServer();
+    toast(server.signed_out_others ? "Saved. Other phones need to sign in again." : "Saved");
+  } catch (e) { toast(e.message, true); }
+});
+$("#dtoken-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  try {
+    const r = await api("/api/server/device-token", { current_password: f.current_password.value });
+    f.current_password.value = "";
+    $("#dtoken-value").value = r.device_token;
+    $("#dtoken-new").hidden = false;
+    loadServer();
+  } catch (e) { toast(e.message, true); }
+});
+$("#dtoken-copy").addEventListener("click", async () => {
+  const v = $("#dtoken-value");
+  try { await navigator.clipboard.writeText(v.value); toast("Copied"); } catch (e) { v.select(); }
+});
+try { $("#tz-list").replaceChildren(...Intl.supportedValuesOf("timeZone").map((z) => el("option", { value: z }))); } catch (e) { /* older browser: type it */ }
+
 // ---- tabs ----
 function openTab(name) {
   if (!$(`#tab-${name}`)) name = "now";
@@ -531,8 +598,11 @@ async function refresh() {
     if (!status.device) status.device = { online: true, known: true };
     $("#local-only").hidden = viaServer;
     $("#logout").hidden = !viaServer;
+    $("#server-only").hidden = !viaServer;
+    nameBoard(status);
     renderStatus();
     if (!cfg || wasServer !== viaServer) loadConfig();
+    if (viaServer && !server) loadServer();
   } catch (e) {
     if (++failures >= 2) {
       $("#link").textContent = viaServer ? "Can't reach the server" : "Can't reach the display";

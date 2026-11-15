@@ -42,7 +42,7 @@ class Server:
         self.proc: subprocess.Popen | None = None
 
     def start(self) -> None:
-        env = dict(os.environ, APP_PASSWORD=PASSWORD, DEVICE_TOKEN=TOKEN, DATA_DIR=str(self.data), HOLD_SECONDS=str(HOLD), **self.env)
+        env = {**os.environ, "APP_PASSWORD": PASSWORD, "DEVICE_TOKEN": TOKEN, "DATA_DIR": str(self.data), "HOLD_SECONDS": str(HOLD), **self.env}
         self.proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "app:app", "--port", str(self.port), "--log-level", "warning", "--no-proxy-headers"],
                                      cwd=SERVER_DIR, env=env)
         for _ in range(100):
@@ -70,7 +70,7 @@ def server(tmp_path):
 
 def signed_in(server: Server) -> httpx.Client:
     client = httpx.Client(base_url=server.url, timeout=10)
-    r = client.post("/login", data={"password": PASSWORD})
+    r = client.post("/login", data={"username": "admin", "password": PASSWORD})
     assert r.status_code == 303 and r.headers["location"] == "/"
     return client
 
@@ -104,18 +104,18 @@ def test_everything_needs_a_login(server):
 
 def test_wrong_password_and_lockout(server):
     anon = httpx.Client(base_url=server.url, timeout=10)
-    assert anon.post("/login", data={"password": "nope"}).status_code == 401
+    assert anon.post("/login", data={"username": "admin", "password": "nope"}).status_code == 401
     assert "session" not in anon.cookies
     for _ in range(4):
-        anon.post("/login", data={"password": "nope"})
+        anon.post("/login", data={"username": "admin", "password": "nope"})
     # five wrong tries: locked out, even with the right password
-    assert anon.post("/login", data={"password": PASSWORD}).status_code == 429
+    assert anon.post("/login", data={"username": "admin", "password": PASSWORD}).status_code == 429
 
 
 def test_login_logout(server):
     client = signed_in(server)
     assert client.get("/").status_code == 200
-    assert "httponly" in client.post("/login", data={"password": PASSWORD}).headers["set-cookie"].lower()
+    assert "httponly" in client.post("/login", data={"username": "admin", "password": PASSWORD}).headers["set-cookie"].lower()
     assert client.post("/logout").status_code == 303
     assert client.get("/api/status").status_code == 401
 
@@ -136,13 +136,13 @@ def test_password_header_guesses_are_locked_out_too(server):
         assert httpx.get(server.url + "/api/status", headers={"X-Admin-Key": f"guess-{i}"}).status_code == 401
     # locked: the right password no longer works from here, by header or by form
     assert httpx.get(server.url + "/api/status", headers={"X-Admin-Key": PASSWORD}).status_code == 401
-    assert httpx.post(server.url + "/login", data={"password": PASSWORD}).status_code == 429
+    assert httpx.post(server.url + "/login", data={"username": "admin", "password": PASSWORD}).status_code == 429
 
 
 def test_made_up_forwarding_header_does_not_dodge_the_lockout(server):
     for i in range(5):
-        httpx.post(server.url + "/login", data={"password": "nope"}, headers={"X-Forwarded-For": f"10.0.0.{i}"}, timeout=10)
-    r = httpx.post(server.url + "/login", data={"password": PASSWORD}, headers={"X-Forwarded-For": "10.9.9.9"})
+        httpx.post(server.url + "/login", data={"username": "admin", "password": "nope"}, headers={"X-Forwarded-For": f"10.0.0.{i}"}, timeout=10)
+    r = httpx.post(server.url + "/login", data={"username": "admin", "password": PASSWORD}, headers={"X-Forwarded-For": "10.9.9.9"})
     assert r.status_code == 429
 
 
@@ -152,14 +152,14 @@ def test_guesses_from_many_addresses_do_not_lock_out_the_owner(tmp_path):
     try:
         def guess(i: int) -> None:
             for _ in range(5):
-                httpx.post(s.url + "/login", data={"password": "nope"}, headers={"X-Forwarded-For": f"10.0.{i}.1"}, timeout=20)
+                httpx.post(s.url + "/login", data={"username": "admin", "password": "nope"}, headers={"X-Forwarded-For": f"10.0.{i}.1"}, timeout=20)
         threads = [threading.Thread(target=guess, args=(i,)) for i in range(10)]  # 50 wrong passwords
         for th in threads:
             th.start()
         for th in threads:
             th.join()
         def login(ip: str, password: str = PASSWORD) -> int:
-            return httpx.post(s.url + "/login", data={"password": password}, headers={"X-Forwarded-For": ip}, timeout=20).status_code
+            return httpx.post(s.url + "/login", data={"username": "admin", "password": password}, headers={"X-Forwarded-For": ip}, timeout=20).status_code
         # each guessing network is locked out, also from its other addresses
         assert login("10.0.3.1") == 429
         assert login("10.0.3.77") == 429
@@ -182,7 +182,7 @@ def test_full_failure_table_keeps_lockouts_and_lets_newcomers_in(tmp_path):
     s.start()
     try:
         def login(ip: str, password: str = PASSWORD) -> int:
-            return httpx.post(s.url + "/login", data={"password": password}, headers={"X-Forwarded-For": ip}, timeout=20).status_code
+            return httpx.post(s.url + "/login", data={"username": "admin", "password": password}, headers={"X-Forwarded-For": ip}, timeout=20).status_code
         assert login("10.50.0.1") == 303  # this network is now trusted
         for i in range(3):
             assert login(f"10.0.{i}.1", "nope") == 401  # fills the table

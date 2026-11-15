@@ -11,7 +11,7 @@ self.addEventListener("activate", (ev) => {
 });
 self.addEventListener("fetch", (ev) => {
   const url = new URL(ev.request.url);
-  if (ev.request.method !== "GET" || url.origin !== location.origin || /^\/(api\/|login|logout|healthz)/.test(url.pathname)) return;
+  if (ev.request.method !== "GET" || url.origin !== location.origin || /^\/(api\/|login|logout|setup|healthz)/.test(url.pathname)) return;
   ev.respondWith(
     fetch(ev.request).then((res) => {
       // Only plain successes are kept: a redirect to the sign-in page must not replace the app.

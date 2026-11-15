@@ -195,16 +195,23 @@ phone ──HTTPS──► nginx-proxy ──► split-flap server (Docker)
 
 **Set up the server** (Docker, behind [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy)):
 1. Copy `server/.env.example` to `server/.env` and fill it in:
-   - `APP_PASSWORD`: the password for the app's sign-in page. It faces the internet, so make it long: 16 or more random characters. Five wrong passwords lock out the network they came from for five minutes. When many networks guess at once, each one is locked out after two wrong tries, except networks that have signed in successfully in the last 30 days. Phone carriers share addresses between many customers, so a stranger's guessing can occasionally lock out your phone's network for five minutes; staying signed in (sessions last 30 days) avoids that.
-   - `DEVICE_TOKEN`: a random secret for the display, for example from `openssl rand -hex 24`.
    - `VIRTUAL_HOST`: the hostname nginx-proxy should route, e.g. `flap.example.com`. Set `LETSENCRYPT_HOST` too if you use acme-companion.
    - `PROXY_NETWORK`: the Docker network your nginx-proxy is on.
 2. From the repository root: `docker compose -f server/docker-compose.yml up -d --build`
-3. Open `https://<your hostname>/` and sign in. It says the display has not connected yet.
+3. **Straight away**, open `https://<your hostname>/`. It shows a one-time **setup page**: choose a username and password, a name for the app and its time zone. Whoever fills it in first owns the server, so don't leave a fresh server unclaimed.
+4. The next page shows the display's **device token**, once. Copy it: you'll enter it on the display. (You can make a new one later under **Settings → Server**.)
+
+Later, the app's **Settings** tab has a **Server** section: change the name and time zone, the username and password (a new password signs out every other phone), or make a new device token.
+
+To start over (for example, if you lost the password): delete `auth.json` from the `splitflap-data` volume and restart the container; in Portainer, Containers → splitflap → **Console**, run `rm /data/auth.json`, then **Restart**. The setup page appears again.
+
+If you'd rather fix the account in the configuration, set `APP_USERNAME` (default `admin`), `APP_PASSWORD` and `DEVICE_TOKEN` (at least 16 characters, e.g. from `openssl rand -hex 24`). The setup page is then skipped and those can't be changed in the app.
+
+About the password: it faces the internet, so make it long, 16 or more random characters. Five wrong passwords lock out the network they came from for five minutes. When many networks guess at once, each one is locked out after two wrong tries, except networks that have signed in successfully in the last 30 days. Phone carriers share addresses between many customers, so a stranger's guessing can occasionally lock out your phone's network for five minutes; staying signed in (sessions last 30 days) avoids that.
 
 **Or with Portainer**, either way:
-- **From this repository**: Stacks → Add stack → **Repository**. Repository URL `https://github.com/Hynicon/split-flap`, compose path `server/docker-compose.yml`. Add the four variables above under **Environment variables**, then deploy. To update later, open the stack and use **Pull and redeploy**.
-- **Without git access from the server**: run `python server/make_bundle.py` on your PC. Then in Portainer, Images → **Build a new image**, name it `splitflap-server:latest`, choose **Upload** and pick `server/dist/splitflap-server.tar`. Then Stacks → Add stack → **Web editor**, paste `server/portainer-stack.yml` (not `docker-compose.yml`, which builds from the repository), and add the variables. To update later, build the image again and use **Update the stack**.
+- **From this repository**: Stacks → Add stack → **Repository**. Repository URL `https://github.com/Hynicon/split-flap`, compose path `server/docker-compose.yml`. Add `VIRTUAL_HOST`, `LETSENCRYPT_HOST` and `PROXY_NETWORK` under **Environment variables**, deploy, and open the setup page straight away. To update later, open the stack and use **Pull and redeploy**.
+- **Without git access from the server**: run `python server/make_bundle.py` on your PC. Then in Portainer, Images → **Build a new image**, name it `splitflap-server:latest`, choose **Upload** and pick `server/dist/splitflap-server.tar`. Then Stacks → Add stack → **Web editor**, paste `server/portainer-stack.yml` (not `docker-compose.yml`, which builds from the repository), add the same variables, deploy, and open the setup page. To update later, build the image again and use **Update the stack**.
 
 Don't publish a port: nginx-proxy reaches the container over the shared network.
 
@@ -223,7 +230,7 @@ What to expect:
 - `python -m auth instagram --device https://<your hostname>` sends tokens through the server; give the app's password when it asks for the key. Tokens wait in the server's memory until the display collects them and are never written to its disk.
 - Mobile data: the display makes a small request about every 25 seconds, in the order of 30 MB a day.
 
-To try the app without hardware: run the server locally (`uvicorn app:app --no-proxy-headers` in `server/`, with `APP_PASSWORD`, `DEVICE_TOKEN` and `DATA_DIR` set) and `python server/fake_device.py http://127.0.0.1:8000 <DEVICE_TOKEN>`.
+To try the app without hardware: run the server locally (`uvicorn app:app --no-proxy-headers` in `server/`, with `DATA_DIR` set to an empty folder), open http://127.0.0.1:8000/ to set it up, then run `python server/fake_device.py http://127.0.0.1:8000 <device token>`.
 
 ## Troubleshooting
 

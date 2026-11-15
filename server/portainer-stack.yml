@@ -1,14 +1,16 @@
 # Portainer stack (Stacks → Add stack → Web editor) for the image built from
 # server/dist/splitflap-server.tar under Images → Build a new image, named splitflap-server:latest.
-# Set the variables below in the stack's "Environment variables" section, not in this file.
+# Set VIRTUAL_HOST, LETSENCRYPT_HOST and PROXY_NETWORK in the stack's "Environment variables" section.
 services:
   splitflap:
     image: splitflap-server:latest
     pull_policy: never  # built on this host, not on a registry
     restart: unless-stopped
     environment:
-      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD}
-      DEVICE_TOKEN: ${DEVICE_TOKEN:?set DEVICE_TOKEN}
+      # Leave these unset to create the account and the device token on the setup page instead.
+      APP_USERNAME: ${APP_USERNAME:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      DEVICE_TOKEN: ${DEVICE_TOKEN:-}
       VIRTUAL_HOST: ${VIRTUAL_HOST:?set VIRTUAL_HOST}
       VIRTUAL_PORT: "8000"
       LETSENCRYPT_HOST: ${LETSENCRYPT_HOST:-}
