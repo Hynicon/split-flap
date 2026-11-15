@@ -137,3 +137,20 @@ def test_environment_variables_skip_setup(tmp_path):
         assert c.post("/api/server/device-token", json={"current_password": "correct horse battery"}).status_code == 400
     finally:
         s.stop()
+
+
+def test_reset_signs_out_old_sessions(tmp_path):
+    s = Server(tmp_path, APP_PASSWORD="", DEVICE_TOKEN="")
+    s.start()
+    try:
+        old, _ = set_up(s)
+        cookie = old.cookies.get("session")
+    finally:
+        s.stop()
+    (tmp_path / "auth.json").unlink()  # start over
+    s.start()
+    try:
+        set_up(s)
+        assert httpx.get(s.url + "/api/status", cookies={"session": cookie}).status_code == 401
+    finally:
+        s.stop()

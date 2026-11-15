@@ -234,8 +234,12 @@ class Account:
         return ENV_USERNAME if self.password_from_env else self.data.get("username", "")
 
     @property
-    def generation(self) -> int:
-        return int(self.data.get("generation", 0))
+    def session_epoch(self) -> str:
+        """Part of every session's signature. It changes with the password, never repeats (random),
+        and differs after a reset, so old sessions stop working in all those cases."""
+        if self.password_from_env:
+            return hashlib.sha256(f"env:{ENV_USERNAME}:{ENV_PASSWORD}".encode()).hexdigest()
+        return self.data.get("session_epoch", "")
 
     @property
     def name(self) -> str:
@@ -274,7 +278,7 @@ class Account:
     def set_login(self, username: str, password: str) -> None:
         self.data["username"] = username
         self.data["password"] = hash_password(password)
-        self.data["generation"] = self.generation + 1  # signs out every other session
+        self.data["session_epoch"] = secrets.token_hex(16)  # signs out every other session
         self.save()
 
 
@@ -285,18 +289,18 @@ account = Account()
 # ---------------------------------------------------------------- login
 
 
-def sign(expires: int, generation: int | None = None) -> str:
-    gen = account.generation if generation is None else generation
-    mac = hmac.new(SECRET, f"{expires}.{gen}".encode(), hashlib.sha256).hexdigest()
-    return f"{expires}.{gen}.{mac}"
+def sign(expires: int) -> str:
+    mac = hmac.new(SECRET, f"{expires}.{account.session_epoch}".encode(), hashlib.sha256).hexdigest()
+    return f"{expires}.{mac}"
 
 
 def valid_session(cookie: str | None) -> bool:
-    """A session is valid until it expires or the password changes (which bumps the generation)."""
+    """A session is valid until it expires, the password changes or the account is reset."""
+    if not account.session_epoch:
+        return False
     try:
-        expires, gen, _ = (cookie or "").split(".", 2)
-        return (int(gen) == account.generation and int(expires) > time.time()
-                and hmac.compare_digest(sign(int(expires), int(gen)), cookie or ""))
+        expires = int((cookie or "").split(".", 1)[0])
+        return expires > time.time() and hmac.compare_digest(sign(expires), cookie or "")
     except ValueError:
         return False
 
