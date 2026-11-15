@@ -15,6 +15,10 @@ upstream/
 # Printables STLs (license: check before redistributing)
 hardware/stl/*
 !hardware/stl/README.md
+# The electronics tray is this project's own design (tools/make_electronics_mount.py)
+!hardware/stl/ElectronicsTray/
+hardware/stl/ElectronicsTray/*
+!hardware/stl/ElectronicsTray/ElectronicsTray.stl
 # Build guide 3D models and photos are made from upstream files (tools/make_guide_models.py, make_guide_images.py)
 hardware/guide/models/
 hardware/guide/img/
