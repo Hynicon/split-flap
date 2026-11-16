@@ -22,6 +22,8 @@ hardware/stl/ElectronicsTray/*
 # Build guide 3D models and photos are made from upstream files (tools/make_guide_models.py, make_guide_images.py)
 hardware/guide/models/
 hardware/guide/img/
+# Your own photos go in photos/ (committed) via tools/add_photos.py; the originals stay here
+hardware/guide/photos-inbox/
 
 # Portainer upload bundle (python server/make_bundle.py)
 server/dist/
